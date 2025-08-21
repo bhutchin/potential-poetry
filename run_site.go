@@ -8,14 +8,11 @@ import (
 	"path/filepath"
 )
 
-var templateFile string = "web/root.html"
-var newPageTemplateFile string = "web/new_page.html"
-
 func main() {
-	http.HandleFunc("/", logRequest(homeHandler))
-	http.HandleFunc("/new_page", logRequest(newPageHandler))
+	http.HandleFunc("/", logRequest(genericFileHandler("root.html")))
+	http.HandleFunc("/new_page", logRequest(genericFileHandler("new_page.html")))
 	http.HandleFunc("/static/", staticFileHandler)
-	http.HandleFunc("/custom_page", genericFileHandler("custom_page.html"))
+	http.HandleFunc("/submit_recipe", logRequest(genericFileHandler("submit_recipe.html")))
 	fmt.Println("Starting web server..")
 	http.ListenAndServe(":8080", nil)
 }
@@ -34,17 +31,6 @@ func readFile(path_to_file string) (string, error) {
 	}
 
 	return string(data), nil
-}
-
-func homeHandler(website http.ResponseWriter, r *http.Request) {
-	fileContent, err := readFile(templateFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
-		http.Error(website, "Failed to load content", http.StatusInternalServerError)
-		return
-	}
-	website.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(website, fileContent)
 }
 
 func genericFileHandler(filePath string) http.HandlerFunc {
@@ -78,16 +64,4 @@ func staticFileHandler(w http.ResponseWriter, r *http.Request) {
 	// }
 	// w.Header().Set("Content-Type", "text/css")
 	// w.Write(content)
-}
-
-func newPageHandler(website http.ResponseWriter, r *http.Request) {
-	fileContent, err := readFile(newPageTemplateFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
-		http.Error(website, "Failed to load content", http.StatusInternalServerError)
-		return
-	}
-
-	website.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(website, fileContent)
 }

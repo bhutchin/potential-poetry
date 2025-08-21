@@ -24,3 +24,142 @@ body {
     color: white;
     padding: 5px;
 }
+
+.content-container {
+    margin: 40px;
+    /* Add these properties to create a distinct content area */
+    background-color: white;
+    padding: 20px 40px;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.content-container h1 {
+    color: #333;
+}
+
+.content-container form {
+    background-color: #f9f9f9;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    width: 90%;
+}
+
+.content-container label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: bold;
+}
+
+.content-container input[type="text"] {
+    width: calc(100% - 20px);
+    padding: 10px;
+    margin-bottom: 15px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.content-container input[type="submit"] {
+    background-color: #4CAF50;
+    color: white;
+    padding: 10px 15px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+.content-container input[type="submit"]:hover {
+    background-color: #45a049;
+}
+
+.add-button {
+    padding: 8px 15px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.add-button:hover {
+    background-color: #45a049;
+}
+
+.submit-button {
+    padding: 10px 20px;
+    background-color: #008CBA;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 20px;
+}
+
+.submit-button:hover {
+    background-color: #007B9E;
+}
+
+/* Styles for the recipe submission form */
+#ingredientForm {
+    background-color: transparent; /* Override .content-container form style */
+    box-shadow: none;
+    padding: 0;
+    width: 100%;
+}
+
+#ingredientsTable {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px; /* Space between table and buttons */
+}
+
+#ingredientsTable th {
+    text-align: left;
+    padding-bottom: 10px;
+    color: #555;
+    font-weight: bold;
+    border-bottom: 2px solid #eee;
+}
+
+#ingredientsTable td {
+    padding: 8px 4px 8px 0;
+    vertical-align: top;
+}
+
+/* Column widths */
+.ingredient-col { width: 60%; }
+.amount-col { width: 15%; }
+.measurement-col { width: 15%; }
+/* The 4th column for the button will auto-size */
+ 
+#ingredientsTable input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box; /* Important for 100% width */
+    margin-bottom: 0; /* Override generic input style */
+}
+
+#ingredientForm .add-button {
+    margin-right: 10px;
+}
+
+.remove-button {
+    background-color: #dc3545; /* A standard 'danger' red */
+    color: white;
+    border: none;
+    /* Adjust padding to match the height of the text inputs */
+    padding: 11px 15px;
+    box-sizing: border-box;
+    border-radius: 4px; /* Softer edges */
+    cursor: pointer;
+    font-weight: bold;
+    transition: background-color 0.2s ease-in-out;
+}
+
+.remove-button:hover {
+    background-color: #c82333; /* A darker red for hover state */
+}

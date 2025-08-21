@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Submit a Recipe</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="content-container">
+        <h1>Submit a Recipe</h1>
+        <p>Add your ingredients below and click submit.</p>
+
+        <form action="/submit_ingredients" method="post" id="ingredientForm">
+            <table id="ingredientsTable">
+                <thead>
+                    <tr>
+                        <th class="ingredient-col">Ingredient</th>
+                        <th class="amount-col">Amount</th>
+                        <th class="measurement-col">Measurement</th>
+                        <th></th> <!-- New column for remove button -->
+                    </tr>
+                </thead>
+                <tbody id="ingredientRows">
+                    <!-- Initial row -->
+                    <tr class="ingredient-row">
+                        <td><input type="text" name="ingredients[0][name]" placeholder="e.g., Flour" required></td>
+                        <td><input type="text" name="ingredients[0][amount]" placeholder="e.g., 2" required></td>
+                        <td><input type="text" name="ingredients[0][measurement]" placeholder="e.g., cups" required></td>
+                        <td><button type="button" class="remove-button" onclick="removeIngredientRow(this)">Remove</button></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <button type="button" class="add-button" onclick="addIngredientRow()">+ Add Ingredient</button>
+            <input type="submit" class="submit-button" value="Submit Recipe">
+        </form>
+    </div>
+
+    <p style="text-align: center; margin-top: 20px;">
+        <a href="/">Return to Home Page</a>
+    </p>
+
+    <script>
+        let ingredientCount = 1;
+
+        function addIngredientRow() {
+            const tbody = document.getElementById('ingredientRows');
+            const newRow = document.createElement('tr'); // Create a new row element
+            newRow.classList.add('ingredient-row'); // Add class for styling/selection
+            
+            newRow.innerHTML = `
+                <td><input type="text" name="ingredients[${ingredientCount}][name]" placeholder="e.g., Sugar" required></td>
+                <td><input type="text" name="ingredients[${ingredientCount}][amount]" placeholder="e.g., 1" required></td>
+                <td><input type="text" name="ingredients[${ingredientCount}][measurement]" placeholder="e.g., cup" required></td>
+                <td><button type="button" class="remove-button" onclick="removeIngredientRow(this)">Remove</button></td>
+            `;
+            
+            tbody.appendChild(newRow);
+            ingredientCount++;
+            toggleRemoveButtons();
+        }
+
+        function removeIngredientRow(button) {
+            button.closest('.ingredient-row').remove();
+            toggleRemoveButtons();
+        }
+
+        function toggleRemoveButtons() {
+            const rows = document.querySelectorAll('#ingredientRows .ingredient-row');
+            rows.forEach(row => {
+                const removeButton = row.querySelector('.remove-button');
+                if (removeButton) {
+                    // Use 'visibility' to prevent the table layout from shifting
+                    removeButton.style.visibility = rows.length > 1 ? 'visible' : 'hidden';
+                }
+            });
+        }
+
+        // Hide the remove button on the initial row when the page loads
+        document.addEventListener('DOMContentLoaded', toggleRemoveButtons);
+    </script>
+</body>
+</html>
