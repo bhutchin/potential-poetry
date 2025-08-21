@@ -12,7 +12,8 @@ func main() {
 	http.HandleFunc("/", logRequest(genericFileHandler("root.html")))
 	http.HandleFunc("/new_page", logRequest(genericFileHandler("new_page.html")))
 	http.HandleFunc("/static/", staticFileHandler)
-	http.HandleFunc("/submit_recipe", logRequest(genericFileHandler("submit_recipe.html")))
+	http.HandleFunc("/submit_recipe", logRequest(genericFileHandler("submit_recipe.html"))) // This now correctly points to the recipe form
+	http.HandleFunc("/submit_ingredients", logRequest(submitIngredientsHandler))
 	fmt.Println("Starting web server..")
 	http.ListenAndServe(":8080", nil)
 }
@@ -64,4 +65,26 @@ func staticFileHandler(w http.ResponseWriter, r *http.Request) {
 	// }
 	// w.Header().Set("Content-Type", "text/css")
 	// w.Write(content)
+}
+
+func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Failed to parse form", http.StatusBadRequest)
+		return
+	}
+
+	// The form data is available in r.PostForm.
+	// You can now process it, for example, by saving it to the database.
+	log.Println("Received ingredients submission:")
+	for key, values := range r.PostForm {
+		log.Printf("  %s: %v\n", key, values)
+	}
+
+	// Redirect the user back to the recipe page after submission.
+	http.Redirect(w, r, "/submit_recipe", http.StatusSeeOther)
 }
