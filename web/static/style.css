@@ -1,0 +1,26 @@
+body {
+    background-color: lightblue;
+    color: darkred;
+    font-family: Arial, sans-serif;
+}
+
+.image-container {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.image-container img {
+    display: block;
+}
+
+.image-container:hover::after {
+    content: 'Click to go to New Page';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 5px;
+}
