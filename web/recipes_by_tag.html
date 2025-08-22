@@ -2,17 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>All Recipes</title>
+    <title>Recipes Tagged with "{{.TagName}}"</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="content-container">
-        <h1>All Saved Recipes</h1>
-
-        <form action="/recipes" method="get" class="search-form">
-            <input type="text" name="q" class="search-input" placeholder="Search by recipe title..." value="{{.SearchQuery}}">
-            <button type="submit" class="search-button">Search</button>
-        </form>
+        <h1>Recipes Tagged with "<strong>{{.TagName}}</strong>"</h1>
 
         {{if .Recipes}}
             {{range .Recipes}}
@@ -30,18 +25,14 @@
             </div>
             {{end}}
         {{else}}
-            {{if .SearchQuery}}
-                <p>No recipes found matching your search for "<strong>{{.SearchQuery}}</strong>".</p>
-            {{else}}
-            <p>No recipes have been submitted yet. <a href="/submit_recipe">Be the first!</a></p>
-            {{end}}
+            <p>No recipes found with the tag "<strong>{{.TagName}}</strong>".</p>
         {{end}}
     </div>
 
     {{if gt .TotalPages 1}}
     <div class="pagination">
         {{if .HasPrev}}
-            <a href="/recipes?q={{.SearchQuery}}&page={{.PrevPage}}" class="pagination-link">&laquo; Previous</a>
+            <a href="/recipes/tag/{{.TagName}}?page={{.PrevPage}}" class="pagination-link">&laquo; Previous</a>
         {{else}}
             <span class="pagination-link disabled">&laquo; Previous</span>
         {{end}}
@@ -49,7 +40,7 @@
         <span class="pagination-info">Page {{.CurrentPage}} of {{.TotalPages}}</span>
 
         {{if .HasNext}}
-            <a href="/recipes?q={{.SearchQuery}}&page={{.NextPage}}" class="pagination-link">Next &raquo;</a>
+            <a href="/recipes/tag/{{.TagName}}?page={{.NextPage}}" class="pagination-link">Next &raquo;</a>
         {{else}}
             <span class="pagination-link disabled">Next &raquo;</span>
         {{end}}
@@ -57,7 +48,7 @@
     {{end}}
 
     <p style="text-align: center; margin-top: 20px;">
-        <a href="/">Return to Home Page</a>
+        <a href="/recipes">Back to All Recipes</a>
     </p>
 </body>
 </html>

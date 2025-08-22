@@ -11,16 +11,40 @@
         <p>Select recipes to generate a consolidated shopping list.</p>
 
         <form action="/meal-plan" method="post" class="meal-plan-form">
-            <h3>Select Recipes</h3>
+
+            <h3 class="section-title">Available Recipes</h3>
             <div class="recipe-selection-list">
                 {{range .AllRecipes}}
-                <div class="recipe-checkbox">
-                    <input type="checkbox" name="recipe_ids" value="{{.ID}}" id="recipe_{{.ID}}" {{if (index $.SelectedRecipes .ID)}}checked{{end}}>
-                    <label for="recipe_{{.ID}}">{{.Title}}</label>
-                </div>
+                    {{if not (index $.SelectedRecipes .ID)}}
+                        <div class="recipe-checkbox">
+                            <input type="checkbox" name="recipe_ids" value="{{.ID}}" id="recipe_{{.ID}}">
+                            <label for="recipe_{{.ID}}">{{.Title}}</label>
+                        </div>
+                    {{end}}
                 {{end}}
             </div>
-            <button type="submit" class="submit-button">Generate Shopping List</button>
+
+            <h3 class="section-title">Current Meal Plan</h3>
+            {{$hasSelected := false}}
+            <div class="recipe-selection-list">
+                {{range .AllRecipes}}
+                    {{if (index $.SelectedRecipes .ID)}}
+                        {{$hasSelected = true}}
+                        <div class="recipe-checkbox">
+                            <input type="checkbox" name="recipe_ids" value="{{.ID}}" id="recipe_{{.ID}}" checked>
+                            <label for="recipe_{{.ID}}">{{.Title}}</label>
+                        </div>
+                    {{end}}
+                {{end}}
+            </div>
+            {{if not $hasSelected}}
+                <p>No meals selected yet. Choose from the available recipes above.</p>
+            {{end}}
+
+            <div class="meal-plan-actions">
+                <button type="submit" class="submit-button">Update Shopping List</button>
+                <a href="/meal-plan?action=clear" class="clear-button">Clear Plan</a>
+            </div>
         </form>
 
         {{if .ShoppingList}}
@@ -28,17 +52,17 @@
         <table class="shopping-list-table">
             <thead>
                 <tr>
+                    <th class="ingredient-col">Ingredient</th>
                     <th class="amount-col">Amount</th>
                     <th class="measurement-col">Measurement</th>
-                    <th>Ingredient</th>
                 </tr>
             </thead>
             <tbody>
                 {{range .ShoppingList}}
                 <tr>
+                    <td>{{.Name}}</td>
                     <td>{{.Amount}}</td>
                     <td>{{.Measurement}}</td>
-                    <td>{{.Name}}</td>
                 </tr>
                 {{end}}
             </tbody>

@@ -21,3 +21,15 @@ CREATE TABLE IF NOT EXISTS method_steps (
     description TEXT NOT NULL,
     UNIQUE(recipe_id, step_number)
 );
+
+-- New tables for categories/tags
+CREATE TABLE IF NOT EXISTS categories (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recipe_categories (
+    recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    PRIMARY KEY (recipe_id, category_id)
+);

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"potential-poetry/db"
@@ -26,6 +27,7 @@ type SubmitPageData struct {
 // ViewRecipesPageData holds data for the recipe list page, including search results.
 type ViewRecipesPageData struct {
 	SearchQuery string
+	TagName     string
 	Recipes     []db.Recipe
 	CurrentPage int
 	TotalPages  int
@@ -68,6 +70,7 @@ func main() {
 	r.HandleFunc("/recipe/edit/{id:[0-9]+}", logRequest(editRecipePageHandler)).Methods("GET")
 	r.HandleFunc("/recipe/update/{id:[0-9]+}", logRequest(updateRecipeHandler)).Methods("POST")
 	r.HandleFunc("/recipe/delete/{id:[0-9]+}", logRequest(deleteRecipeHandler)).Methods("POST")
+	r.HandleFunc("/recipes/tag/{tag}", logRequest(recipesByTagHandler)).Methods("GET")
 	r.HandleFunc("/meal-plan", logRequest(mealPlanHandler)).Methods("GET", "POST")
 
 	fmt.Println("Starting web server..")
@@ -75,6 +78,41 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+func recipesByTagHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	tag := vars["tag"]
+
+	const recipesPerPage = 5
+	pageStr := r.URL.Query().Get("page")
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * recipesPerPage
+
+	recipes, totalRecipes, err := db.FetchRecipesByTag(tag, recipesPerPage, offset)
+	if err != nil {
+		log.Printf("Error fetching recipes for tag %s: %v", tag, err)
+		http.Error(w, "Failed to load recipes", http.StatusInternalServerError)
+		return
+	}
+
+	totalPages := (totalRecipes + recipesPerPage - 1) / recipesPerPage
+
+	data := ViewRecipesPageData{
+		TagName:     tag,
+		Recipes:     recipes,
+		CurrentPage: page,
+		TotalPages:  totalPages,
+		HasPrev:     page > 1,
+		PrevPage:    page - 1,
+		HasNext:     page < totalPages,
+		NextPage:    page + 1,
+	}
+
+	renderTemplate(w, "web/recipes_by_tag.html", data)
 }
 
 func logRequest(handler http.HandlerFunc) http.HandlerFunc {
@@ -206,7 +244,16 @@ func updateRecipeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := db.UpdateRecipe(id, title, ingredients, method); err != nil {
+	tagsStr := r.PostFormValue("tags")
+	var tags []string
+	if tagsStr != "" {
+		tags = strings.Split(tagsStr, ",")
+		for i := range tags {
+			tags[i] = strings.TrimSpace(tags[i])
+		}
+	}
+
+	if err := db.UpdateRecipe(id, title, ingredients, method, tags); err != nil {
 		log.Printf("Error updating recipe %d: %v", id, err)
 		http.Error(w, "Failed to update recipe", http.StatusInternalServerError)
 		return
@@ -321,40 +368,26 @@ func viewRecipesHandler(w http.ResponseWriter, r *http.Request) {
 		NextPage:    page + 1,
 	}
 
-	// Parse the template. Using ParseFiles is important for security and performance.
-	tmpl, err := template.ParseFiles("web/view_recipes.html")
-	if err != nil {
-		log.Printf("Error parsing template: %v", err)
-		http.Error(w, "Failed to load page", http.StatusInternalServerError)
-		return
-	}
-
-	// Execute the template with the data.
-	w.Header().Set("Content-Type", "text/html")
-	err = tmpl.Execute(w, data)
-	if err != nil {
-		log.Printf("Error executing template: %v", err)
-		http.Error(w, "Failed to render page", http.StatusInternalServerError)
-	}
+	renderTemplate(w, "web/view_recipes.html", data)
 }
 
 func mealPlanHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "GET" {
-		// Fetch all recipes for the selection list
-		allRecipes, err := db.FetchAllRecipeInfos()
-		if err != nil {
-			log.Printf("Error fetching all recipe infos: %v", err)
-			http.Error(w, "Failed to load recipes", http.StatusInternalServerError)
-			return
-		}
+	const mealPlanCookieName = "meal-plan-recipes"
 
-		data := MealPlanPageData{
-			AllRecipes: allRecipes,
-		}
-		renderMealPlanTemplate(w, data)
+	// Handle clearing the meal plan
+	if r.Method == "GET" && r.URL.Query().Get("action") == "clear" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     mealPlanCookieName,
+			Value:    "",
+			Path:     "/",
+			Expires:  time.Unix(0, 0),
+			HttpOnly: true,
+		})
+		http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
 		return
 	}
 
+	// Handle form submission to update the meal plan
 	if r.Method == "POST" {
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, "Failed to parse form", http.StatusBadRequest)
@@ -362,38 +395,75 @@ func mealPlanHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		recipeIDsStr := r.PostForm["recipe_ids"]
-		var recipeIDs []int
-		selectedRecipesMap := make(map[int]bool)
-		for _, idStr := range recipeIDsStr {
+		cookieValue := strings.Join(recipeIDsStr, ",")
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     mealPlanCookieName,
+			Value:    cookieValue,
+			Path:     "/",
+			Expires:  time.Now().Add(30 * 24 * time.Hour), // Expires in 30 days
+			HttpOnly: true,
+		})
+
+		// Redirect to the GET handler to display the plan
+		http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
+		return
+	}
+
+	// GET request logic to display the current meal plan
+	var recipeIDs []int
+	selectedRecipesMap := make(map[int]bool)
+
+	if cookie, err := r.Cookie(mealPlanCookieName); err == nil && cookie.Value != "" {
+		idStrs := strings.Split(cookie.Value, ",")
+		for _, idStr := range idStrs {
 			id, err := strconv.Atoi(idStr)
 			if err == nil {
 				recipeIDs = append(recipeIDs, id)
 				selectedRecipesMap[id] = true
 			}
 		}
+	}
 
-		// Consolidate ingredients
-		shoppingList, err := consolidateIngredients(recipeIDs)
+	var shoppingList []db.Ingredient
+	if len(recipeIDs) > 0 {
+		var err error
+		shoppingList, err = consolidateIngredients(recipeIDs)
 		if err != nil {
 			log.Printf("Error consolidating ingredients: %v", err)
 			http.Error(w, "Failed to generate shopping list", http.StatusInternalServerError)
 			return
 		}
+	}
 
-		// Fetch all recipes again for rendering the page
-		allRecipes, err := db.FetchAllRecipeInfos()
-		if err != nil {
-			log.Printf("Error fetching all recipe infos: %v", err)
-			http.Error(w, "Failed to load recipes", http.StatusInternalServerError)
-			return
-		}
+	allRecipes, err := db.FetchAllRecipeInfos()
+	if err != nil {
+		log.Printf("Error fetching all recipe infos: %v", err)
+		http.Error(w, "Failed to load recipes", http.StatusInternalServerError)
+		return
+	}
 
-		data := MealPlanPageData{
-			AllRecipes:      allRecipes,
-			SelectedRecipes: selectedRecipesMap,
-			ShoppingList:    shoppingList,
-		}
-		renderMealPlanTemplate(w, data)
+	data := MealPlanPageData{
+		AllRecipes:      allRecipes,
+		SelectedRecipes: selectedRecipesMap,
+		ShoppingList:    shoppingList,
+	}
+	renderMealPlanTemplate(w, data)
+}
+
+func renderTemplate(w http.ResponseWriter, templateFile string, data interface{}) {
+	tmpl, err := template.ParseFiles(templateFile)
+	if err != nil {
+		log.Printf("Error parsing template %s: %v", templateFile, err)
+		http.Error(w, "Failed to load page", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	err = tmpl.Execute(w, data)
+	if err != nil {
+		log.Printf("Error executing template %s: %v", templateFile, err)
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
 
@@ -505,8 +575,17 @@ func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tagsStr := r.PostFormValue("tags")
+	var tags []string
+	if tagsStr != "" {
+		tags = strings.Split(tagsStr, ",")
+		for i := range tags {
+			tags[i] = strings.TrimSpace(tags[i])
+		}
+	}
+
 	// Save the parsed ingredients to the database.
-	recipeID, err := db.SaveRecipe(title, ingredients, method)
+	recipeID, err := db.SaveRecipe(title, ingredients, method, tags)
 	if err != nil {
 		log.Printf("Error saving recipe to database: %v", err)
 		http.Error(w, "Failed to save recipe", http.StatusInternalServerError)

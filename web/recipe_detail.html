@@ -41,6 +41,17 @@
                 </ol>
             {{end}}
 
+            {{if .Recipe.Categories}}
+            <div class="tags-container">
+                <h3>Tags</h3>
+                <ul class="tag-list">
+                    {{range .Recipe.Categories}}
+                    <li><a href="/recipes/tag/{{.Name}}" class="tag-link">{{.Name}}</a></li>
+                    {{end}}
+                </ul>
+            </div>
+            {{end}}
+
             <div class="form-actions">
                 <a href="/recipe/edit/{{.Recipe.ID}}" class="edit-button">Edit Recipe</a>
                 <form action="/recipe/delete/{{.Recipe.ID}}" method="post" class="delete-form" onsubmit="return confirm('Are you sure you want to delete this recipe?');">
