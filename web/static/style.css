@@ -163,3 +163,39 @@ body {
 .remove-button:hover {
     background-color: #c82333; /* A darker red for hover state */
 }
+
+/* Styles for the scrollable table on new_page.html */
+.table-container {
+    height: 300px;
+    overflow-y: scroll;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    margin-top: 20px;
+}
+
+.table-container table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.table-container th,
+.table-container td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+.table-container th {
+    background-color: #f2f2f2;
+    position: sticky;
+    top: 0;
+    z-index: 1; /* Ensures header stays on top of scrolled content */
+}
+
+.table-container tbody tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+
+.table-container tbody tr:hover {
+    background-color: #e9e9e9;
+}

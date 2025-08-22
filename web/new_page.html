@@ -2,42 +2,13 @@
 <html>
 <head>
     <title>New Page</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        h1 { color: #333; }
-        .table-container {
-            height: 300px; /* Adjust as needed */
-            overflow-y: scroll;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 10px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        th {
-            background-color: #f2f2f2;
-            position: sticky;
-            top: 0;
-        }
-        tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        tr:hover {
-            background-color: #e9e9e9;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <h1>Welcome to the New Page!</h1>
-
-    <div class="table-container">
-        <table>
+    <div class="content-container">
+        <h1>Welcome to the New Page!</h1>
+        <div class="table-container">
+            <table>
             <thead>
                 <tr>
                     <th>Header 1</th>
@@ -120,7 +91,8 @@
                     <td>Row 12, Col 4</td>
                 </tr>
             </tbody>
-        </table>
+            </table>
+        </div>
     </div>
     <p style="text-align: center; margin-top: 20px;">
         <a href="/">Return to Home Page</a>
