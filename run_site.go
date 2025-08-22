@@ -7,60 +7,70 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
-	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
+	"github.com/gorilla/mux"
+	"potential-poetry/db"
 )
-
-// DB is a global database connection pool.
-var DB *sql.DB
-
-// Ingredient represents the structure of a single ingredient.
-type Ingredient struct {
-	Name        string
-	Amount      string
-	Measurement string
-}
-
-// Recipe represents a recipe with its ingredients.
-type Recipe struct {
-	ID          int
-	Title       string
-	CreatedAt   time.Time
-	Ingredients []Ingredient
-}
 
 // SubmitPageData holds data for the recipe submission page template.
 type SubmitPageData struct {
 	Success bool
 	Error   string
-	Recipe  *Recipe // For pre-populating the form in edit mode.
+	Recipe  *db.Recipe // For pre-populating the form in edit mode.
+}
+
+// ViewRecipesPageData holds data for the recipe list page, including search results.
+type ViewRecipesPageData struct {
+	SearchQuery string
+	Recipes     []db.Recipe
+	CurrentPage int
+	TotalPages  int
+	NextPage    int
+	PrevPage    int
+	HasNext     bool
+	HasPrev     bool
+}
+
+// MealPlanPageData holds data for the meal plan page.
+type MealPlanPageData struct {
+	AllRecipes      []db.RecipeInfo
+	SelectedRecipes map[int]bool
+	ShoppingList    []db.Ingredient
 }
 
 func main() {
 	// Initialize the database connection.
-	err := initDB()
+	err := db.InitDB()
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	defer DB.Close()
+	defer db.CloseDB()
 
-	http.HandleFunc("/", logRequest(genericFileHandler("root.html")))
-	http.HandleFunc("/new_page", logRequest(genericFileHandler("new_page.html")))
-	http.HandleFunc("/static/", staticFileHandler)
-	http.HandleFunc("/submit_recipe", logRequest(submitRecipePageHandler))
-	http.HandleFunc("/recipe/edit/", logRequest(editRecipePageHandler))
-	http.HandleFunc("/submit_ingredients", logRequest(submitIngredientsHandler))
-	http.HandleFunc("/recipe/update/", logRequest(updateRecipeHandler))
-	http.HandleFunc("/recipes", logRequest(viewRecipesHandler))
-	http.HandleFunc("/recipe/delete/", logRequest(deleteRecipeHandler))
-	http.HandleFunc("/recipe/", logRequest(recipeDetailHandler))
+	r := mux.NewRouter()
+
+	// Static file server
+	staticFileServer := http.FileServer(http.Dir("./web/static/"))
+	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", staticFileServer))
+
+	// Page and action routes
+	r.HandleFunc("/", logRequest(genericFileHandler("root.html"))).Methods("GET")
+	r.HandleFunc("/new_page", logRequest(genericFileHandler("new_page.html"))).Methods("GET")
+	r.HandleFunc("/submit_recipe", logRequest(submitRecipePageHandler)).Methods("GET")
+	r.HandleFunc("/recipes", logRequest(viewRecipesHandler)).Methods("GET")
+	r.HandleFunc("/submit_ingredients", logRequest(submitIngredientsHandler)).Methods("POST")
+
+	// Routes with path variables for recipe ID
+	r.HandleFunc("/recipe/{id:[0-9]+}", logRequest(recipeDetailHandler)).Methods("GET")
+	r.HandleFunc("/recipe/edit/{id:[0-9]+}", logRequest(editRecipePageHandler)).Methods("GET")
+	r.HandleFunc("/recipe/update/{id:[0-9]+}", logRequest(updateRecipeHandler)).Methods("POST")
+	r.HandleFunc("/recipe/delete/{id:[0-9]+}", logRequest(deleteRecipeHandler)).Methods("POST")
+	r.HandleFunc("/meal-plan", logRequest(mealPlanHandler)).Methods("GET", "POST")
+
 	fmt.Println("Starting web server..")
-	err = http.ListenAndServe(":8080", nil)
+	err = http.ListenAndServe(":8080", r)
 	if err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
@@ -71,25 +81,6 @@ func logRequest(handler http.HandlerFunc) http.HandlerFunc {
 		log.Printf("%s %s %s\n", r.RemoteAddr, r.Method, r.URL)
 		handler(w, r)
 	}
-}
-
-// initDB initializes the database connection using environment variables.
-func initDB() error {
-	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		os.Getenv("DB_HOST"),
-		os.Getenv("DB_PORT"),
-		os.Getenv("DB_USER"),
-		os.Getenv("DB_PASSWORD"),
-		os.Getenv("DB_NAME"),
-	)
-
-	var err error
-	DB, err = sql.Open("pgx", connStr)
-	if err != nil {
-		return err
-	}
-
-	return DB.Ping()
 }
 
 func readFile(path_to_file string) (string, error) {
@@ -115,25 +106,6 @@ func genericFileHandler(filePath string) http.HandlerFunc {
 	}
 }
 
-func staticFileHandler(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path[len("/static/"):] // Strip "/static/" prefix
-	if path == "" {
-		http.NotFound(w, r)
-		return
-	}
-
-	fullPath := filepath.Join("web", "static", path)
-	http.ServeFile(w, r, fullPath)
-
-	// content, err := os.ReadFile(fullPath)
-	// if err != nil {
-	// 	http.Error(w, "File not found", http.StatusNotFound)
-	// 	return
-	// }
-	// w.Header().Set("Content-Type", "text/css")
-	// w.Write(content)
-}
-
 func submitRecipePageHandler(w http.ResponseWriter, r *http.Request) {
 	// Check for a success message from a redirect.
 	success := r.URL.Query().Get("success") == "true"
@@ -141,7 +113,7 @@ func submitRecipePageHandler(w http.ResponseWriter, r *http.Request) {
 	data := SubmitPageData{
 		Success: success,
 		// Provide an empty Recipe struct for a new submission form.
-		Recipe:  &Recipe{},
+		Recipe:  &db.Recipe{},
 	}
 
 	tmpl, err := template.ParseFiles("web/submit_recipe.html")
@@ -160,14 +132,15 @@ func submitRecipePageHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func editRecipePageHandler(w http.ResponseWriter, r *http.Request) {
-	idStr := r.URL.Path[len("/recipe/edit/"):]
+	vars := mux.Vars(r)
+	idStr := vars["id"]
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 
-	recipe, err := fetchRecipeByID(id)
+	recipe, err := db.FetchRecipeByID(id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.NotFound(w, r)
@@ -203,7 +176,8 @@ func updateRecipeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idStr := r.URL.Path[len("/recipe/update/"):]
+	vars := mux.Vars(r)
+	idStr := vars["id"]
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.NotFound(w, r)
@@ -228,7 +202,14 @@ func updateRecipeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := updateRecipe(id, title, ingredients); err != nil {
+	method, err := parseMethodStepsForm(r)
+	if err != nil {
+		log.Printf("Error parsing method steps form: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := db.UpdateRecipe(id, title, ingredients, method); err != nil {
 		log.Printf("Error updating recipe %d: %v", id, err)
 		http.Error(w, "Failed to update recipe", http.StatusInternalServerError)
 		return
@@ -236,7 +217,7 @@ func updateRecipeHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Successfully updated recipe %d.", id)
 	// Redirect to the recipe detail page with a success message.
-	http.Redirect(w, r, fmt.Sprintf("/recipe/%d?success=true", id), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/recipe/%d?updated=true", id), http.StatusSeeOther)
 }
 
 func deleteRecipeHandler(w http.ResponseWriter, r *http.Request) {
@@ -245,15 +226,15 @@ func deleteRecipeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract ID from URL, e.g., "/recipe/delete/1" -> "1"
-	idStr := r.URL.Path[len("/recipe/delete/"):]
+	vars := mux.Vars(r)
+	idStr := vars["id"]
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 
-	if err := deleteRecipeByID(id); err != nil {
+	if err := db.DeleteRecipeByID(id); err != nil {
 		log.Printf("Error deleting recipe %d: %v", id, err)
 		http.Error(w, "Failed to delete recipe", http.StatusInternalServerError)
 		return
@@ -264,57 +245,16 @@ func deleteRecipeHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/recipes", http.StatusSeeOther)
 }
 
-func deleteRecipeByID(id int) error {
-	// The ON DELETE CASCADE on the ingredients table will handle deleting associated ingredients.
-	_, err := DB.Exec("DELETE FROM recipes WHERE id = $1", id)
-	return err
-}
-
-func updateRecipe(id int, title string, ingredients []Ingredient) error {
-	tx, err := DB.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// 1. Update the recipe title
-	_, err = tx.Exec("UPDATE recipes SET title = $1 WHERE id = $2", title, id)
-	if err != nil {
-		return fmt.Errorf("failed to update recipe title: %w", err)
-	}
-
-	// 2. Delete old ingredients
-	_, err = tx.Exec("DELETE FROM ingredients WHERE recipe_id = $1", id)
-	if err != nil {
-		return fmt.Errorf("failed to delete old ingredients: %w", err)
-	}
-
-	// 3. Insert new ingredients
-	stmt, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, measurement) VALUES($1, $2, $3, $4)")
-	if err != nil {
-		return fmt.Errorf("failed to prepare ingredient statement: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, ing := range ingredients {
-		if _, err := stmt.Exec(id, ing.Name, ing.Amount, ing.Measurement); err != nil {
-			return fmt.Errorf("failed to insert ingredient %s: %w", ing.Name, err)
-		}
-	}
-
-	return tx.Commit()
-}
-
 func recipeDetailHandler(w http.ResponseWriter, r *http.Request) {
-	// Extract ID from URL, e.g., "/recipe/1" -> "1"
-	idStr := r.URL.Path[len("/recipe/"):]
+	vars := mux.Vars(r)
+	idStr := vars["id"]
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 
-	recipe, err := fetchRecipeByID(id)
+	recipe, err := db.FetchRecipeByID(id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.NotFound(w, r)
@@ -325,10 +265,10 @@ func recipeDetailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	success := r.URL.Query().Get("success") == "true"
+	success := r.URL.Query().Get("updated") == "true"
 	data := struct {
 		Success bool
-		Recipe  *Recipe
+		Recipe  *db.Recipe
 	}{
 		Success: success,
 		Recipe:  recipe,
@@ -349,51 +289,36 @@ func recipeDetailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func fetchRecipeByID(id int) (*Recipe, error) {
-	query := `
-		SELECT r.id, r.title, r.created_at, i.name, i.amount, i.measurement
-		FROM recipes r
-		LEFT JOIN ingredients i ON r.id = i.recipe_id
-		WHERE r.id = $1
-		ORDER BY i.id
-	`
-	rows, err := DB.Query(query, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var recipe *Recipe
-	for rows.Next() {
-		var recipeID int
-		var recipeTitle string
-		var recipeCreatedAt time.Time
-		var ingName, ingAmount, ingMeasurement sql.NullString
-		if err := rows.Scan(&recipeID, &recipeTitle, &recipeCreatedAt, &ingName, &ingAmount, &ingMeasurement); err != nil {
-			return nil, err
-		}
-		if recipe == nil {
-			recipe = &Recipe{ID: recipeID, Title: recipeTitle, CreatedAt: recipeCreatedAt}
-		}
-		if ingName.Valid {
-			recipe.Ingredients = append(recipe.Ingredients, Ingredient{Name: ingName.String, Amount: ingAmount.String, Measurement: ingMeasurement.String})
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if recipe == nil {
-		return nil, sql.ErrNoRows // No recipe found
-	}
-	return recipe, nil
-}
-
 func viewRecipesHandler(w http.ResponseWriter, r *http.Request) {
-	recipes, err := fetchRecipes()
+	// Get the search query from the URL, e.g., /recipes?q=chicken
+	searchQuery := r.URL.Query().Get("q")
+
+	const recipesPerPage = 5
+	pageStr := r.URL.Query().Get("page")
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * recipesPerPage
+
+	recipes, totalRecipes, err := db.FetchRecipes(searchQuery, recipesPerPage, offset)
 	if err != nil {
 		log.Printf("Error fetching recipes: %v", err)
 		http.Error(w, "Failed to load recipes", http.StatusInternalServerError)
 		return
+	}
+
+	totalPages := (totalRecipes + recipesPerPage - 1) / recipesPerPage
+
+	data := ViewRecipesPageData{
+		SearchQuery: searchQuery,
+		Recipes:     recipes,
+		CurrentPage: page,
+		TotalPages:  totalPages,
+		HasPrev:     page > 1,
+		PrevPage:    page - 1,
+		HasNext:     page < totalPages,
+		NextPage:    page + 1,
 	}
 
 	// Parse the template. Using ParseFiles is important for security and performance.
@@ -406,59 +331,135 @@ func viewRecipesHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Execute the template with the data.
 	w.Header().Set("Content-Type", "text/html")
-	err = tmpl.Execute(w, recipes)
+	err = tmpl.Execute(w, data)
 	if err != nil {
 		log.Printf("Error executing template: %v", err)
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
 
-func fetchRecipes() ([]Recipe, error) {
-	// The query joins recipes and ingredients and orders them to make grouping in Go easier.
-	query := `
-		SELECT r.id, r.title, r.created_at, i.name, i.amount, i.measurement
-		FROM recipes r
-		LEFT JOIN ingredients i ON r.id = i.recipe_id
-		ORDER BY r.created_at DESC, r.id, i.id
-	`
-	rows, err := DB.Query(query)
+func mealPlanHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		// Fetch all recipes for the selection list
+		allRecipes, err := db.FetchAllRecipeInfos()
+		if err != nil {
+			log.Printf("Error fetching all recipe infos: %v", err)
+			http.Error(w, "Failed to load recipes", http.StatusInternalServerError)
+			return
+		}
+
+		data := MealPlanPageData{
+			AllRecipes: allRecipes,
+		}
+		renderMealPlanTemplate(w, data)
+		return
+	}
+
+	if r.Method == "POST" {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Failed to parse form", http.StatusBadRequest)
+			return
+		}
+
+		recipeIDsStr := r.PostForm["recipe_ids"]
+		var recipeIDs []int
+		selectedRecipesMap := make(map[int]bool)
+		for _, idStr := range recipeIDsStr {
+			id, err := strconv.Atoi(idStr)
+			if err == nil {
+				recipeIDs = append(recipeIDs, id)
+				selectedRecipesMap[id] = true
+			}
+		}
+
+		// Consolidate ingredients
+		shoppingList, err := consolidateIngredients(recipeIDs)
+		if err != nil {
+			log.Printf("Error consolidating ingredients: %v", err)
+			http.Error(w, "Failed to generate shopping list", http.StatusInternalServerError)
+			return
+		}
+
+		// Fetch all recipes again for rendering the page
+		allRecipes, err := db.FetchAllRecipeInfos()
+		if err != nil {
+			log.Printf("Error fetching all recipe infos: %v", err)
+			http.Error(w, "Failed to load recipes", http.StatusInternalServerError)
+			return
+		}
+
+		data := MealPlanPageData{
+			AllRecipes:      allRecipes,
+			SelectedRecipes: selectedRecipesMap,
+			ShoppingList:    shoppingList,
+		}
+		renderMealPlanTemplate(w, data)
+	}
+}
+
+func renderMealPlanTemplate(w http.ResponseWriter, data MealPlanPageData) {
+	tmpl, err := template.ParseFiles("web/meal_plan.html")
 	if err != nil {
-		return nil, err
+		log.Printf("Error parsing meal plan template: %v", err)
+		http.Error(w, "Failed to load page", http.StatusInternalServerError)
+		return
 	}
-	defer rows.Close()
+	w.Header().Set("Content-Type", "text/html")
+	err = tmpl.Execute(w, data)
+	if err != nil {
+		log.Printf("Error executing meal plan template: %v", err)
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
 
-	// Use a map to group ingredients by recipe ID efficiently.
-	recipeMap := make(map[int]*Recipe)
-	var orderedRecipes []*Recipe // Use a slice to maintain the order from the query.
+// consolidateIngredients fetches ingredients for selected recipes and consolidates them.
+func consolidateIngredients(recipeIDs []int) ([]db.Ingredient, error) {
+	// map[IngredientName]map[Measurement]Amount
+	consolidated := make(map[string]map[string]float64)
 
-	for rows.Next() {
-		var recipeID int
-		var recipeTitle string
-		var recipeCreatedAt time.Time
-		var ingName, ingAmount, ingMeasurement sql.NullString // Use sql.NullString for LEFT JOIN
-
-		if err := rows.Scan(&recipeID, &recipeTitle, &recipeCreatedAt, &ingName, &ingAmount, &ingMeasurement); err != nil {
-			return nil, err
+	for _, id := range recipeIDs {
+		recipe, err := db.FetchRecipeByID(id)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				log.Printf("Skipping non-existent recipe ID %d in meal plan", id)
+				continue
+			}
+			return nil, fmt.Errorf("failed to fetch recipe %d: %w", id, err)
 		}
 
-		if _, ok := recipeMap[recipeID]; !ok {
-			recipe := &Recipe{ID: recipeID, Title: recipeTitle, CreatedAt: recipeCreatedAt}
-			recipeMap[recipeID] = recipe
-			orderedRecipes = append(orderedRecipes, recipe)
-		}
+		for _, ing := range recipe.Ingredients {
+			amount, err := strconv.ParseFloat(ing.Amount, 64)
+			if err != nil {
+				log.Printf("Could not parse amount '%s' for ingredient '%s', skipping aggregation", ing.Amount, ing.Name)
+				continue
+			}
 
-		if ingName.Valid {
-			recipeMap[recipeID].Ingredients = append(recipeMap[recipeID].Ingredients, Ingredient{Name: ingName.String, Amount: ingAmount.String, Measurement: ingMeasurement.String})
+			if _, ok := consolidated[ing.Name]; !ok {
+				consolidated[ing.Name] = make(map[string]float64)
+			}
+			consolidated[ing.Name][ing.Measurement] += amount
 		}
 	}
 
-	// Convert pointer slice to value slice for the template.
-	recipes := make([]Recipe, len(orderedRecipes))
-	for i, r := range orderedRecipes {
-		recipes[i] = *r
+	var shoppingList []db.Ingredient
+	for name, measurementMap := range consolidated {
+		for measurement, amount := range measurementMap {
+			shoppingList = append(shoppingList, db.Ingredient{
+				Name:        name,
+				Measurement: measurement,
+				Amount:      strconv.FormatFloat(amount, 'f', -1, 64),
+			})
+		}
 	}
 
-	return recipes, nil
+	sort.Slice(shoppingList, func(i, j int) bool {
+		if shoppingList[i].Name != shoppingList[j].Name {
+			return shoppingList[i].Name < shoppingList[j].Name
+		}
+		return shoppingList[i].Measurement < shoppingList[j].Measurement
+	})
+
+	return shoppingList, nil
 }
 
 func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
@@ -488,8 +489,15 @@ func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	method, err := parseMethodStepsForm(r)
+	if err != nil {
+		log.Printf("Error parsing method steps form: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// Save the parsed ingredients to the database.
-	if err := saveRecipe(title, ingredients); err != nil {
+	if err := db.SaveRecipe(title, ingredients, method); err != nil {
 		log.Printf("Error saving recipe to database: %v", err)
 		http.Error(w, "Failed to save recipe", http.StatusInternalServerError)
 		return
@@ -502,10 +510,10 @@ func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseIngredientsForm extracts ingredient data from the HTTP request form.
-func parseIngredientsForm(r *http.Request) ([]Ingredient, error) {
+func parseIngredientsForm(r *http.Request) ([]db.Ingredient, error) {
 	// Regex to capture the index and field (name, amount, measurement) from form keys.
 	re := regexp.MustCompile(`^ingredients\[(\d+)\]\[(name|amount|measurement)\]$`)
-	ingredientsMap := make(map[int]Ingredient)
+	ingredientsMap := make(map[int]db.Ingredient)
 
 	for key, values := range r.PostForm {
 		if len(values) == 0 {
@@ -546,7 +554,7 @@ func parseIngredientsForm(r *http.Request) ([]Ingredient, error) {
 	}
 	sort.Ints(keys)
 
-	var ingredients []Ingredient
+	var ingredients []db.Ingredient
 	for _, k := range keys {
 		ingredients = append(ingredients, ingredientsMap[k])
 	}
@@ -554,31 +562,40 @@ func parseIngredientsForm(r *http.Request) ([]Ingredient, error) {
 	return ingredients, nil
 }
 
-// saveRecipe saves a new recipe and its ingredients to the database in a single transaction.
-func saveRecipe(title string, ingredients []Ingredient) error {
-	tx, err := DB.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback() // Rollback is a no-op if Commit succeeds.
+// parseMethodStepsForm extracts method step data from the HTTP request form.
+func parseMethodStepsForm(r *http.Request) ([]db.MethodStep, error) {
+	// Regex to capture the index from form keys like `method[0][description]`.
+	re := regexp.MustCompile(`^method\[(\d+)\]\[description\]$`)
+	stepsMap := make(map[int]string)
 
-	var recipeID int
-	err = tx.QueryRow("INSERT INTO recipes (title) VALUES ($1) RETURNING id", title).Scan(&recipeID)
-	if err != nil {
-		return fmt.Errorf("failed to create recipe: %w", err)
-	}
-
-	stmt, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, measurement) VALUES($1, $2, $3, $4)")
-	if err != nil {
-		return fmt.Errorf("failed to prepare ingredient statement: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, ing := range ingredients {
-		if _, err := stmt.Exec(recipeID, ing.Name, ing.Amount, ing.Measurement); err != nil {
-			return fmt.Errorf("failed to insert ingredient %s: %w", ing.Name, err)
+	for key, values := range r.PostForm {
+		if len(values) == 0 || values[0] == "" {
+			continue
 		}
+
+		matches := re.FindStringSubmatch(key)
+		if len(matches) != 2 {
+			continue
+		}
+
+		index, _ := strconv.Atoi(matches[1])
+		stepsMap[index] = values[0]
 	}
 
-	return tx.Commit()
+	// Sort map keys to ensure steps are in the correct order.
+	var keys []int
+	for k := range stepsMap {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+
+	var steps []db.MethodStep
+	for i, k := range keys {
+		steps = append(steps, db.MethodStep{
+			StepNumber:  i + 1, // Ensure step numbers are sequential and 1-based.
+			Description: stepsMap[k],
+		})
+	}
+
+	return steps, nil
 }

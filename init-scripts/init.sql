@@ -13,3 +13,11 @@ CREATE TABLE IF NOT EXISTS ingredients (
     amount NUMERIC NOT NULL,
     measurement VARCHAR(50) NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS method_steps (
+    id SERIAL PRIMARY KEY,
+    recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    step_number INTEGER NOT NULL,
+    description TEXT NOT NULL,
+    UNIQUE(recipe_id, step_number)
+);

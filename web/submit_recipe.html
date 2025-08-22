@@ -67,17 +67,49 @@
             </table>
 
             <button type="button" class="add-button" onclick="addIngredientRow()">+ Add Ingredient</button>
+
+            <h3 class="section-title">Method</h3>
+            <table id="methodTable">
+                <thead>
+                    <tr>
+                        <th class="step-col">Step</th>
+                        <th class="description-col">Description</th>
+                        <th></th> <!-- For remove button -->
+                    </tr>
+                </thead>
+                <tbody id="methodSteps">
+                    {{if .Recipe.Method}}
+                        {{range $index, $step := .Recipe.Method}}
+                        <tr class="method-step-row">
+                            <td class="step-number-cell">{{$step.StepNumber}}.</td>
+                            <td><textarea name="method[{{$index}}][description]" rows="2" required>{{$step.Description}}</textarea></td>
+                            <td><button type="button" class="remove-button" onclick="removeMethodStep(this)">Remove</button></td>
+                        </tr>
+                        {{end}}
+                    {{else}}
+                    <!-- Initial method step row -->
+                    <tr class="method-step-row">
+                        <td class="step-number-cell">1.</td>
+                        <td><textarea name="method[0][description]" rows="2" placeholder="e.g., Preheat oven to 350°F (175°C)." required></textarea></td>
+                        <td><button type="button" class="remove-button" onclick="removeMethodStep(this)">Remove</button></td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            <button type="button" class="add-button" onclick="addMethodStepRow()">+ Add Step</button>
+
             <input type="submit" class="submit-button" value="{{if .Recipe.ID}}Update Recipe{{else}}Submit Recipe{{end}}">
         </form>
     </div>
 
     <p style="text-align: center; margin-top: 20px;">
-        <a href="/">Return to Home Page</a>
+        <a href="{{if .Recipe.ID}}/recipe/{{.Recipe.ID}}{{else}}/{{end}}" class="cancel-link">Cancel</a>
     </p>
 
     <script>
         // Initialize the counter based on the number of ingredients passed to the template.
         let ingredientCount = {{if .Recipe.Ingredients}}{{len .Recipe.Ingredients}}{{else}}1{{end}};
+        let methodStepCount = {{if .Recipe.Method}}{{len .Recipe.Method}}{{else}}1{{end}};
 
         function addIngredientRow() {
             const tbody = document.getElementById('ingredientRows');
@@ -96,9 +128,30 @@
             toggleRemoveButtons();
         }
 
+        function addMethodStepRow() {
+            const tbody = document.getElementById('methodSteps');
+            const newRow = document.createElement('tr');
+            newRow.classList.add('method-step-row');
+            
+            newRow.innerHTML = `
+                <td class="step-number-cell">${methodStepCount + 1}.</td>
+                <td><textarea name="method[${methodStepCount}][description]" rows="2" placeholder="Next step..." required></textarea></td>
+                <td><button type="button" class="remove-button" onclick="removeMethodStep(this)">Remove</button></td>
+            `;
+            
+            tbody.appendChild(newRow);
+            methodStepCount++;
+            updateStepNumbers();
+        }
+
         function removeIngredientRow(button) {
             button.closest('.ingredient-row').remove();
             toggleRemoveButtons();
+        }
+
+        function removeMethodStep(button) {
+            button.closest('.method-step-row').remove();
+            updateStepNumbers();
         }
 
         function toggleRemoveButtons() {
@@ -112,8 +165,31 @@
             });
         }
 
+        function toggleMethodRemoveButtons() {
+            const rows = document.querySelectorAll('#methodSteps .method-step-row');
+            rows.forEach(row => {
+                const removeButton = row.querySelector('.remove-button');
+                if (removeButton) {
+                    removeButton.style.visibility = rows.length > 1 ? 'visible' : 'hidden';
+                }
+            });
+        }
+
+        function updateStepNumbers() {
+            const rows = document.querySelectorAll('#methodSteps .method-step-row');
+            rows.forEach((row, index) => {
+                row.querySelector('.step-number-cell').textContent = `${index + 1}.`;
+                row.querySelector('textarea').name = `method[${index}][description]`;
+            });
+            methodStepCount = rows.length;
+            toggleMethodRemoveButtons();
+        }
+
         // Hide the remove button on the initial row when the page loads
-        document.addEventListener('DOMContentLoaded', toggleRemoveButtons);
+        document.addEventListener('DOMContentLoaded', () => {
+            toggleRemoveButtons();
+            toggleMethodRemoveButtons();
+        });
     </script>
 </body>
 </html>

@@ -10,7 +10,7 @@
         {{if .Recipe}}
             {{if .Success}}
             <div class="alert alert-success">
-                <strong>Success!</strong> Your recipe has been updated.
+                <strong>Success!</strong> Recipe updated successfully.
             </div>
             {{end}}
             <h1>{{.Recipe.Title}}</h1>
@@ -25,6 +25,15 @@
                 </ul>
             {{else}}
                 <p>This recipe has no ingredients listed.</p>
+            {{end}}
+
+            {{if .Recipe.Method}}
+                <h3>Method</h3>
+                <ol class="method-list">
+                    {{range .Recipe.Method}}
+                    <li>{{.Description}}</li>
+                    {{end}}
+                </ol>
             {{end}}
 
             <div class="form-actions">

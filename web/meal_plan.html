@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Meal Planner</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="content-container">
+        <h1>Meal Planner</h1>
+        <p>Select recipes to generate a consolidated shopping list.</p>
+
+        <form action="/meal-plan" method="post" class="meal-plan-form">
+            <h3>Select Recipes</h3>
+            <div class="recipe-selection-list">
+                {{range .AllRecipes}}
+                <div class="recipe-checkbox">
+                    <input type="checkbox" name="recipe_ids" value="{{.ID}}" id="recipe_{{.ID}}" {{if (index $.SelectedRecipes .ID)}}checked{{end}}>
+                    <label for="recipe_{{.ID}}">{{.Title}}</label>
+                </div>
+                {{end}}
+            </div>
+            <button type="submit" class="submit-button">Generate Shopping List</button>
+        </form>
+
+        {{if .ShoppingList}}
+        <h3 class="section-title">Consolidated Shopping List</h3>
+        <ul class="ingredient-list">
+            {{range .ShoppingList}}
+            <li>{{.Amount}} {{.Measurement}} of {{.Name}}</li>
+            {{end}}
+        </ul>
+        {{end}}
+    </div>
+    <p style="text-align: center; margin-top: 20px;">
+        <a href="/recipes" class="cancel-link">Back to All Recipes</a>
+    </p>
+</body>
+</html>
