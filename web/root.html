@@ -1,17 +1,18 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Go Web Server</title>
+    <meta charset="UTF-8">
+    <title>Recipe Book</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="image-container">
-        <a href="/new_page">
-            <img src="https://upload.wikimedia.org/wikipedia/commons/0/05/Latin_letter_E.svg" alt="Click to go to New Page">
-        </a>
-        <p>
-            <a href="/submit_recipe">Submit a new recipe</a>
-        </p>
+    <div class="content-container home-page">
+        <h1>Welcome to the Recipe Book</h1>
+        <p class="subtitle">Your personal collection of culinary creations. Get started by viewing existing recipes or adding a new one.</p>
+        <div class="nav-links">
+            <a href="/recipes" class="nav-button view-recipes">View All Recipes</a>
+            <a href="/submit_recipe" class="nav-button submit-recipe">Submit a New Recipe</a>
+        </div>
     </div>
 </body>
 </html>

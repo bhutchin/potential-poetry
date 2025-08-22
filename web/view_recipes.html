@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>All Recipes</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="content-container">
+        <h1>All Saved Recipes</h1>
+
+        {{if .}}
+            {{range .}}
+            <div class="recipe-card">
+                <a href="/recipe/{{.ID}}" class="recipe-title-link">
+                    <h2>{{.Title}}</h2>
+                </a>
+                <p class="recipe-date">Created on: {{.CreatedAt.Format "January 2, 2006"}}</p>
+                {{if .Ingredients}}
+                    <h3>Ingredients</h3>
+                    <ul class="ingredient-list">
+                        {{range .Ingredients}}
+                        <li>{{.Amount}} {{.Measurement}} of {{.Name}}</li>
+                        {{end}}
+                    </ul>
+                {{else}}
+                    <p>This recipe has no ingredients listed.</p>
+                {{end}}
+            </div>
+            {{end}}
+        {{else}}
+            <p>No recipes have been submitted yet. <a href="/submit_recipe">Be the first!</a></p>
+        {{end}}
+    </div>
+
+    <p style="text-align: center; margin-top: 20px;">
+        <a href="/">Return to Home Page</a>
+    </p>
+</body>
+</html>

@@ -2,15 +2,39 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    {{if .Recipe.ID}}
+    <title>Edit Recipe</title>
+    {{else}}
     <title>Submit a Recipe</title>
+    {{end}}
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="content-container">
+        {{if .Recipe.ID}}
+        <h1>Edit Recipe</h1>
+        <p>Update the details for your recipe below.</p>
+        {{else}}
         <h1>Submit a Recipe</h1>
         <p>Add your ingredients below and click submit.</p>
+        {{end}}
 
+        {{if .Success}}
+        <div class="alert alert-success">
+            <strong>Success!</strong> Your recipe has been saved.
+        </div>
+        {{end}}
+
+        {{if .Recipe.ID}}
+        <form action="/recipe/update/{{.Recipe.ID}}" method="post" id="ingredientForm">
+        {{else}}
         <form action="/submit_ingredients" method="post" id="ingredientForm">
+        {{end}}
+            <div class="form-group">
+                <label for="recipeTitle">Recipe Title</label>
+                <input type="text" id="recipeTitle" name="recipeTitle" placeholder="e.g., Chocolate Chip Cookies" value="{{.Recipe.Title}}" required>
+            </div>
+
             <table id="ingredientsTable">
                 <thead>
                     <tr>
@@ -21,18 +45,29 @@
                     </tr>
                 </thead>
                 <tbody id="ingredientRows">
-                    <!-- Initial row -->
+                    {{if .Recipe.Ingredients}}
+                        {{range $index, $ing := .Recipe.Ingredients}}
+                        <tr class="ingredient-row">
+                            <td><input type="text" name="ingredients[{{$index}}][name]" value="{{$ing.Name}}" required></td>
+                            <td><input type="number" step="any" name="ingredients[{{$index}}][amount]" value="{{$ing.Amount}}" required></td>
+                            <td><input type="text" name="ingredients[{{$index}}][measurement]" value="{{$ing.Measurement}}" required></td>
+                            <td><button type="button" class="remove-button" onclick="removeIngredientRow(this)">Remove</button></td>
+                        </tr>
+                        {{end}}
+                    {{else}}
+                    <!-- Initial row for new recipe -->
                     <tr class="ingredient-row">
                         <td><input type="text" name="ingredients[0][name]" placeholder="e.g., Flour" required></td>
-                        <td><input type="text" name="ingredients[0][amount]" placeholder="e.g., 2" required></td>
+                        <td><input type="number" step="any" name="ingredients[0][amount]" placeholder="e.g., 2" required></td>
                         <td><input type="text" name="ingredients[0][measurement]" placeholder="e.g., cups" required></td>
                         <td><button type="button" class="remove-button" onclick="removeIngredientRow(this)">Remove</button></td>
                     </tr>
+                    {{end}}
                 </tbody>
             </table>
 
             <button type="button" class="add-button" onclick="addIngredientRow()">+ Add Ingredient</button>
-            <input type="submit" class="submit-button" value="Submit Recipe">
+            <input type="submit" class="submit-button" value="{{if .Recipe.ID}}Update Recipe{{else}}Submit Recipe{{end}}">
         </form>
     </div>
 
@@ -41,7 +76,8 @@
     </p>
 
     <script>
-        let ingredientCount = 1;
+        // Initialize the counter based on the number of ingredients passed to the template.
+        let ingredientCount = {{if .Recipe.Ingredients}}{{len .Recipe.Ingredients}}{{else}}1{{end}};
 
         function addIngredientRow() {
             const tbody = document.getElementById('ingredientRows');
@@ -50,7 +86,7 @@
             
             newRow.innerHTML = `
                 <td><input type="text" name="ingredients[${ingredientCount}][name]" placeholder="e.g., Sugar" required></td>
-                <td><input type="text" name="ingredients[${ingredientCount}][amount]" placeholder="e.g., 1" required></td>
+                <td><input type="number" step="any" name="ingredients[${ingredientCount}][amount]" placeholder="e.g., 1" required></td>
                 <td><input type="text" name="ingredients[${ingredientCount}][measurement]" placeholder="e.g., cup" required></td>
                 <td><button type="button" class="remove-button" onclick="removeIngredientRow(this)">Remove</button></td>
             `;
