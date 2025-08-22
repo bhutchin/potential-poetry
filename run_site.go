@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"potential-poetry/db"
@@ -107,11 +108,7 @@ func genericFileHandler(filePath string) http.HandlerFunc {
 }
 
 func submitRecipePageHandler(w http.ResponseWriter, r *http.Request) {
-	// Check for a success message from a redirect.
-	success := r.URL.Query().Get("success") == "true"
-
 	data := SubmitPageData{
-		Success: success,
 		// Provide an empty Recipe struct for a new submission form.
 		Recipe:  &db.Recipe{},
 	}
@@ -265,13 +262,16 @@ func recipeDetailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	success := r.URL.Query().Get("updated") == "true"
+	isUpdated := r.URL.Query().Get("updated") == "true"
+	isCreated := r.URL.Query().Get("created") == "true"
 	data := struct {
-		Success bool
-		Recipe  *db.Recipe
+		IsUpdated bool
+		IsCreated bool
+		Recipe    *db.Recipe
 	}{
-		Success: success,
-		Recipe:  recipe,
+		IsUpdated: isUpdated,
+		IsCreated: isCreated,
+		Recipe:    recipe,
 	}
 
 	tmpl, err := template.ParseFiles("web/recipe_detail.html")
@@ -434,10 +434,19 @@ func consolidateIngredients(recipeIDs []int) ([]db.Ingredient, error) {
 				continue
 			}
 
-			if _, ok := consolidated[ing.Name]; !ok {
-				consolidated[ing.Name] = make(map[string]float64)
+			// Normalize name and measurement for better consolidation.
+			name := strings.ToLower(strings.TrimSpace(ing.Name))
+			measurement := strings.ToLower(strings.TrimSpace(ing.Measurement))
+
+			// Simple singularization for common units (e.g., cups -> cup)
+			if len(measurement) > 1 && strings.HasSuffix(measurement, "s") {
+				measurement = strings.TrimSuffix(measurement, "s")
 			}
-			consolidated[ing.Name][ing.Measurement] += amount
+
+			if _, ok := consolidated[name]; !ok {
+				consolidated[name] = make(map[string]float64)
+			}
+			consolidated[name][measurement] += amount
 		}
 	}
 
@@ -445,7 +454,7 @@ func consolidateIngredients(recipeIDs []int) ([]db.Ingredient, error) {
 	for name, measurementMap := range consolidated {
 		for measurement, amount := range measurementMap {
 			shoppingList = append(shoppingList, db.Ingredient{
-				Name:        name,
+				Name:        strings.Title(name), // Capitalize for display
 				Measurement: measurement,
 				Amount:      strconv.FormatFloat(amount, 'f', -1, 64),
 			})
@@ -497,16 +506,17 @@ func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save the parsed ingredients to the database.
-	if err := db.SaveRecipe(title, ingredients, method); err != nil {
+	recipeID, err := db.SaveRecipe(title, ingredients, method)
+	if err != nil {
 		log.Printf("Error saving recipe to database: %v", err)
 		http.Error(w, "Failed to save recipe", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Successfully saved recipe '%s' with %d ingredients.", title, len(ingredients))
+	log.Printf("Successfully saved recipe '%s' with ID %d.", title, recipeID)
 
-	// Redirect the user back to the recipe page after submission.
-	http.Redirect(w, r, "/submit_recipe?success=true", http.StatusSeeOther)
+	// Redirect to the newly created recipe's detail page with a success message.
+	http.Redirect(w, r, fmt.Sprintf("/recipe/%d?created=true", recipeID), http.StatusSeeOther)
 }
 
 // parseIngredientsForm extracts ingredient data from the HTTP request form.

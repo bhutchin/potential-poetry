@@ -271,42 +271,42 @@ func FetchRecipes(searchQuery string, limit int, offset int) ([]Recipe, int, err
 }
 
 // SaveRecipe saves a new recipe and its components to the database in a single transaction.
-func SaveRecipe(title string, ingredients []Ingredient, method []MethodStep) error {
+func SaveRecipe(title string, ingredients []Ingredient, method []MethodStep) (int, error) {
 	tx, err := conn.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
 	var recipeID int
 	err = tx.QueryRow("INSERT INTO recipes (title) VALUES ($1) RETURNING id", title).Scan(&recipeID)
 	if err != nil {
-		return fmt.Errorf("failed to create recipe: %w", err)
+		return 0, fmt.Errorf("failed to create recipe: %w", err)
 	}
 
 	// Insert ingredients
 	stmtIng, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, measurement) VALUES($1, $2, $3, $4)")
 	if err != nil {
-		return fmt.Errorf("failed to prepare ingredient statement: %w", err)
+		return 0, fmt.Errorf("failed to prepare ingredient statement: %w", err)
 	}
 	defer stmtIng.Close()
 	for _, ing := range ingredients {
 		if _, err := stmtIng.Exec(recipeID, ing.Name, ing.Amount, ing.Measurement); err != nil {
-			return fmt.Errorf("failed to insert ingredient %s: %w", ing.Name, err)
+			return 0, fmt.Errorf("failed to insert ingredient %s: %w", ing.Name, err)
 		}
 	}
 
 	// Insert method steps
 	stmtSteps, err := tx.Prepare("INSERT INTO method_steps(recipe_id, step_number, description) VALUES($1, $2, $3)")
 	if err != nil {
-		return fmt.Errorf("failed to prepare method step statement: %w", err)
+		return 0, fmt.Errorf("failed to prepare method step statement: %w", err)
 	}
 	defer stmtSteps.Close()
 	for _, step := range method {
 		if _, err := stmtSteps.Exec(recipeID, step.StepNumber, step.Description); err != nil {
-			return fmt.Errorf("failed to insert method step %d: %w", step.StepNumber, err)
+			return 0, fmt.Errorf("failed to insert method step %d: %w", step.StepNumber, err)
 		}
 	}
 
-	return tx.Commit()
+	return recipeID, tx.Commit()
 }

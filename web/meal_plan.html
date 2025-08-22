@@ -25,11 +25,24 @@
 
         {{if .ShoppingList}}
         <h3 class="section-title">Consolidated Shopping List</h3>
-        <ul class="ingredient-list">
-            {{range .ShoppingList}}
-            <li>{{.Amount}} {{.Measurement}} of {{.Name}}</li>
-            {{end}}
-        </ul>
+        <table class="shopping-list-table">
+            <thead>
+                <tr>
+                    <th class="amount-col">Amount</th>
+                    <th class="measurement-col">Measurement</th>
+                    <th>Ingredient</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .ShoppingList}}
+                <tr>
+                    <td>{{.Amount}}</td>
+                    <td>{{.Measurement}}</td>
+                    <td>{{.Name}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
         {{end}}
     </div>
     <p style="text-align: center; margin-top: 20px;">

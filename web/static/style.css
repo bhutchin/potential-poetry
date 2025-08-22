@@ -460,3 +460,28 @@ body {
     font-weight: normal;
     margin-bottom: 0;
 }
+
+/* Shopping List Table on Meal Plan Page */
+.shopping-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+
+.shopping-list-table th,
+.shopping-list-table td {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+.shopping-list-table th {
+    background-color: #f2f2f2;
+    font-weight: bold;
+    color: #333;
+}
+
+.shopping-list-table tbody tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+}

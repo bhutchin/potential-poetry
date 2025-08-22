@@ -8,9 +8,14 @@
 <body>
     <div class="content-container">
         {{if .Recipe}}
-            {{if .Success}}
+            {{if .IsUpdated}}
             <div class="alert alert-success">
                 <strong>Success!</strong> Recipe updated successfully.
+            </div>
+            {{end}}
+            {{if .IsCreated}}
+            <div class="alert alert-success">
+                <strong>Success!</strong> Recipe created successfully. <a href="/recipes">View all recipes.</a>
             </div>
             {{end}}
             <h1>{{.Recipe.Title}}</h1>
@@ -20,7 +25,7 @@
                 <h3>Ingredients</h3>
                 <ul class="ingredient-list">
                     {{range .Recipe.Ingredients}}
-                    <li>{{.Amount}} {{.Measurement}} of {{.Name}}</li>
+                    <li>{{.Amount}} {{if .Measurement}}{{.Measurement}} {{end}}{{.Name}}</li>
                     {{end}}
                 </ul>
             {{else}}
