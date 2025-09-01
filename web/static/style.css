@@ -723,6 +723,20 @@ body {
     background-color: #424242;
 }
 
+.print-button {
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: #2196F3; /* A nice blue, matches edit/search */
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    transition: background-color 0.2s ease-in-out;
+}
+
+.print-button:hover {
+    background-color: #1976D2; /* Darker blue on hover */
+}
+
 .meal-plan-actions .submit-button {
     margin-top: 0;
 }

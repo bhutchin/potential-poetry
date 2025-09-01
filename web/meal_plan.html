@@ -28,6 +28,9 @@
             <input type="hidden" name="meal_order" id="meal_order_input">
             <div class="meal-plan-actions">
                 <button type="button" id="update-plan-btn" class="submit-button">Update Shopping List</button>
+                {{if .ShoppingList}}
+                <a href="/meal-plan/print" target="_blank" class="print-button">Print List</a>
+                {{end}}
                 <a href="/meal-plan?action=clear" class="clear-button">Clear Plan</a>
             </div>
         </form>

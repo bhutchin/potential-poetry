@@ -2,21 +2,22 @@ package main
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
+	"potential-poetry/db"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-	"encoding/base64"
+
 	"github.com/PuerkitoBio/goquery"
 	"github.com/gorilla/mux"
-	"potential-poetry/db"
 )
 
 // SubmitPageData holds data for the recipe submission page template.
@@ -47,10 +48,77 @@ type MealPlanCookieData struct {
 
 // MealPlanPageData holds data for the meal plan page.
 type MealPlanPageData struct {
-	AllRecipes      []db.RecipeInfo
-	RecipeCounts    map[int]int // Map of Recipe ID to its count in the meal plan
-	ShoppingList    []db.Ingredient
-	MealOrder       []string
+	AllRecipes   []db.RecipeInfo
+	RecipeCounts map[int]int // Map of Recipe ID to its count in the meal plan
+	ShoppingList []db.Ingredient
+	MealOrder    []string
+}
+
+const mealPlanCookieName = "meal-plan-recipes"
+
+// unitConversions maps various unit names to their equivalent value in the base unit (teaspoons).
+var unitConversions = map[string]float64{
+	"teaspoon":    1,
+	"teaspoons":   1,
+	"tsp":         1,
+	"t":           1, // Common abbreviation
+	"tablespoon":  3,
+	"tablespoons": 3,
+	"tbsp":        3,
+	"T":           3, // Common abbreviation
+	"fluid ounce": 6,
+	"fl oz":       6,
+	"cup":         48,
+	"cups":        48,
+	"c":           48, // Common abbreviation
+	"pint":        96,
+	"pints":       96,
+	"pt":          96,
+	"quart":       192,
+	"quarts":      192,
+	"qt":          192,
+	"gallon":      768,
+	"gallons":     768,
+	"gal":         768,
+	"milliliter":  0.202884,
+	"milliliters": 0.202884,
+	"ml":          0.202884,
+	"liter":       202.884,
+	"liters":      202.884,
+	"l":           202.884,
+}
+
+// orderedUnits provides a hierarchy for formatting consolidated amounts into the largest practical unit.
+var orderedUnits = []struct {
+	Name  string
+	Value float64 // Value in the base unit (teaspoons)
+}{
+	{"gallon", 768}, {"quart", 192}, {"pint", 96}, {"cup", 48}, {"tablespoon", 3}, {"teaspoon", 1},
+}
+
+// weightConversions maps various weight unit names to their equivalent value in the base unit (grams).
+var weightConversions = map[string]float64{
+	"gram":      1,
+	"grams":     1,
+	"g":         1,
+	"ounce":     28.3495,
+	"ounces":    28.3495,
+	"oz":        28.3495,
+	"pound":     453.592,
+	"pounds":    453.592,
+	"lb":        453.592,
+	"lbs":       453.592,
+	"kilogram":  1000,
+	"kilograms": 1000,
+	"kg":        1000,
+}
+
+// orderedWeightUnits provides a hierarchy for formatting consolidated weight amounts.
+var orderedWeightUnits = []struct {
+	Name  string
+	Value float64 // Value in the base unit (grams)
+}{
+	{"kg", 1000}, {"pound", 453.592}, {"ounce", 28.3495}, {"gram", 1},
 }
 
 // JSONLDInstruction represents a step in a recipe's method, supporting multiple JSON-LD formats.
@@ -119,11 +187,20 @@ func main() {
 	r.HandleFunc("/recipe/delete/{id:[0-9]+}", logRequest(deleteRecipeHandler)).Methods("POST")
 	r.HandleFunc("/recipes/tag/{tag}", logRequest(recipesByTagHandler)).Methods("GET")
 	r.HandleFunc("/meal-plan", logRequest(mealPlanHandler)).Methods("GET", "POST")
+	r.HandleFunc("/meal-plan/print", logRequest(printShoppingListHandler)).Methods("GET")
 
-	fmt.Println("Starting web server..")
-	err = http.ListenAndServe(":8080", r)
+	certFile := "certs/cert.pem"
+	keyFile := "certs/key.pem"
+
+	// Check if cert files exist before starting the server
+	if _, err := os.Stat(certFile); os.IsNotExist(err) {
+		log.Fatalf("Certificate file not found: %s. Please run init-ssl.sh to generate it.", certFile)
+	}
+
+	fmt.Println("Starting web server with SSL on https://localhost:8443")
+	err = http.ListenAndServeTLS(":8443", certFile, keyFile, r)
 	if err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		log.Fatalf("Failed to start TLS server: %v", err)
 	}
 }
 
@@ -440,155 +517,45 @@ func viewRecipesHandler(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, "web/view_recipes.html", data)
 }
 
+// mealPlanHandler acts as a router, delegating to specific handlers based on the HTTP method.
 func mealPlanHandler(w http.ResponseWriter, r *http.Request) {
-	const mealPlanCookieName = "meal-plan-recipes"
+	switch r.Method {
+	case http.MethodGet:
+		handleViewMealPlan(w, r)
+	case http.MethodPost:
+		handleUpdateMealPlan(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
 
+// handleViewMealPlan handles GET requests for the meal plan page.
+func handleViewMealPlan(w http.ResponseWriter, r *http.Request) {
 	// Handle clearing the meal plan
-	if r.Method == "GET" && r.URL.Query().Get("action") == "clear" {
-		http.SetCookie(w, &http.Cookie{
-			Name:     mealPlanCookieName,
-			Value:    "",
-			Path:     "/",
-			Expires:  time.Unix(0, 0),
-			HttpOnly: true,
-		})
+	if r.URL.Query().Get("action") == "clear" {
+		clearMealPlanCookie(w, mealPlanCookieName)
 		http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
 		return
 	}
 
-	// Handle form submission to update the meal plan
-	if r.Method == "POST" {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "Failed to parse form", http.StatusBadRequest)
-			return
-		}
-
-		cookieData := MealPlanCookieData{
-			Counts: make(map[int]int),
-			Order:  make([]string, 7), // 7 days
-		}
-
-		// Regex to find count inputs, e.g., "count_123"
-		re := regexp.MustCompile(`^count_(\d+)$`)
-
-		for key, values := range r.PostForm {
-			if len(values) == 0 {
-				continue
-			}
-			matches := re.FindStringSubmatch(key)
-			if len(matches) == 2 {
-				recipeIDStr := matches[1]
-				countStr := values[0]
-				recipeID, _ := strconv.Atoi(recipeIDStr)
-				count, err := strconv.Atoi(countStr)
-				if err != nil || count < 0 {
-					continue // Ignore invalid or negative counts
-				}
-
-				if count > 0 {
-					cookieData.Counts[recipeID] = count
-				}
-			}
-		}
-
-		// Process the meal_order input which contains the visual order of meals
-		orderStr := r.PostFormValue("meal_order")
-		// var orderParts []string
-		if orderStr != "" {
-			orderParts := strings.Split(orderStr, ",")
-
-			// Ensure the order slice has exactly 7 elements
-			for i := 0; i < 7; i++ {
-				if i < len(orderParts) && orderParts[i] != "" {
-					recipeIDStr := orderParts[i]
-					recipeID, _ := strconv.Atoi(recipeIDStr)
-					_, ok := cookieData.Counts[recipeID]
-					if ok {
-						cookieData.Order[i] = recipeIDStr //Only add to the order if the recipeId is in the counts.
-					} else {
-						cookieData.Order[i] = "" // set order to empty string as the recipe count doesnt exist.
-					}
-				} else {
-					cookieData.Order[i] = "" // Ensure empty days are empty strings
-				}
-			}
-
-			//Also populate the meal order from the counts, this ensures they are in both places.
-		}
-
-		// Process the meal_order input which contains the visual order of meals
-		//if orderStr != "" {
-		//	orderParts := strings.Split(orderStr, ",")
-		//	// Ensure the order slice has exactly 7 elements
-		//  for i := 0; i < 7; i++ {
-		//		if i < len(orderParts) && orderParts[i] != "" {
-		//  recipeIDStr := orderParts[i]
-		//  _, err := strconv.Atoi(recipeIDStr)
-		//    if err == nil {
-		//      cookieData.Order[i] = recipeIDStr  //Only add to the order if the recipeId is in the counts.
-		//    }
-		//		} else {
-		//			cookieData.Order[i] = "" // Ensure empty days are empty strings
-		//		}
-		//}
-
-		// Marshal the JSON
-		var err error
-
-		cookieJSON, err := json.Marshal(cookieData)
-		if err != nil {
-			log.Printf("Error marshalling meal plan cookie data: %v", err)
-			http.Error(w, "Failed to save meal plan", http.StatusInternalServerError)
-			return
-		}
-
-		// Base64 encode the JSON data
-		encodedCookieValue := base64.StdEncoding.EncodeToString(cookieJSON)
-
-		http.SetCookie(w, &http.Cookie{
-			Name:     mealPlanCookieName,
-			Value:    encodedCookieValue,
-			Path:     "/",
-			Expires:  time.Now().Add(30 * 24 * time.Hour), // Expires in 30 days
-			HttpOnly: true,
-		})
-
+	cookieData, err := getMealPlanFromCookie(r)
+	if err != nil {
+		log.Printf("Error reading meal plan cookie: %v. Clearing invalid cookie.", err)
+		clearMealPlanCookie(w, mealPlanCookieName)
 		http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
 		return
 	}
 
 	recipeCounts := make(map[int]int)
-	mealOrder := make([]string, 7) // Default to 7 empty days
+	mealOrder := make([]string, 7)
 
-	if cookie, err := r.Cookie(mealPlanCookieName); err == nil && cookie.Value != "" {
-
-
-		decodedCookieValue, err := base64.StdEncoding.DecodeString(cookie.Value)
-		if(err != nil) {
-			log.Printf("Could not decode meal plan cookie: %v. Clearing invalid cookie.", err)
-			clearMealPlanCookie(w, mealPlanCookieName)
-			http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
-			return // Important to return after a redirect
-		}
-		var cookieData MealPlanCookieData
-		if err := json.Unmarshal([]byte(decodedCookieValue), &cookieData); err == nil {
-			if cookieData.Counts != nil {
-				recipeCounts = cookieData.Counts
-			}
-			if len(cookieData.Order) == 7 {
-				mealOrder = cookieData.Order
-			}
-		} else {
-			log.Printf("Could not unmarshal meal plan cookie: %v. Clearing invalid cookie.", err)
-			clearMealPlanCookie(w, mealPlanCookieName)
-			http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
-			return // Important to return after a redirect
-		}
+	if cookieData != nil {
+		recipeCounts = cookieData.Counts
+		mealOrder = cookieData.Order
 	}
 
 	var shoppingList []db.Ingredient
 	if len(recipeCounts) > 0 {
-		var err error
 		shoppingList, err = consolidateIngredients(recipeCounts)
 		if err != nil {
 			log.Printf("Error consolidating ingredients: %v", err)
@@ -613,14 +580,157 @@ func mealPlanHandler(w http.ResponseWriter, r *http.Request) {
 	renderMealPlanTemplate(w, data)
 }
 
+// printShoppingListHandler serves a printer-friendly version of the shopping list.
+func printShoppingListHandler(w http.ResponseWriter, r *http.Request) {
+	cookieData, err := getMealPlanFromCookie(r)
+	if err != nil {
+		// Log the error but continue; this will result in an empty list which is acceptable.
+		log.Printf("Could not get meal plan from cookie for printing: %v", err)
+	}
+
+	recipeCounts := make(map[int]int)
+	if cookieData != nil && cookieData.Counts != nil {
+		recipeCounts = cookieData.Counts
+	}
+
+	var shoppingList []db.Ingredient
+	if len(recipeCounts) > 0 {
+		var err error
+		shoppingList, err = consolidateIngredients(recipeCounts)
+		if err != nil {
+			log.Printf("Error consolidating ingredients for printing: %v", err)
+			http.Error(w, "Failed to generate shopping list", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Use an anonymous struct for the template data, as we only need the list.
+	data := struct {
+		ShoppingList []db.Ingredient
+	}{
+		ShoppingList: shoppingList,
+	}
+
+	renderTemplate(w, "web/print_shopping_list.html", data)
+}
+
+// handleUpdateMealPlan handles POST requests to update the meal plan cookie.
+func handleUpdateMealPlan(w http.ResponseWriter, r *http.Request) {
+	cookieData, err := parseMealPlanForm(r)
+	if err != nil {
+		log.Printf("Error parsing meal plan form: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := setMealPlanCookie(w, cookieData); err != nil {
+		log.Printf("Error setting meal plan cookie: %v", err)
+		http.Error(w, "Failed to save meal plan", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
+}
+
+// getMealPlanFromCookie reads, decodes, and unmarshals the meal plan data from the cookie.
+func getMealPlanFromCookie(r *http.Request) (*MealPlanCookieData, error) {
+	cookie, err := r.Cookie(mealPlanCookieName)
+	if err != nil {
+		if err == http.ErrNoCookie {
+			return nil, nil // No cookie is not an error, just no data.
+		}
+		return nil, err // Other errors are unexpected.
+	}
+
+	if cookie.Value == "" {
+		return nil, nil // Empty cookie is also not an error.
+	}
+
+	decodedCookieValue, err := base64.StdEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		return nil, fmt.Errorf("could not decode meal plan cookie: %w", err)
+	}
+
+	var cookieData MealPlanCookieData
+	if err := json.Unmarshal(decodedCookieValue, &cookieData); err != nil {
+		return nil, fmt.Errorf("could not unmarshal meal plan cookie: %w", err)
+	}
+
+	// Ensure slices/maps are not nil to avoid panics later.
+	if cookieData.Counts == nil {
+		cookieData.Counts = make(map[int]int)
+	}
+	if cookieData.Order == nil || len(cookieData.Order) != 7 {
+		cookieData.Order = make([]string, 7)
+	}
+
+	return &cookieData, nil
+}
+
+// setMealPlanCookie marshals, encodes, and sets the meal plan data in a cookie.
+func setMealPlanCookie(w http.ResponseWriter, data *MealPlanCookieData) error {
+	cookieJSON, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("error marshalling meal plan cookie data: %w", err)
+	}
+
+	encodedCookieValue := base64.StdEncoding.EncodeToString(cookieJSON)
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     mealPlanCookieName,
+		Value:    encodedCookieValue,
+		Path:     "/",
+		Expires:  time.Now().Add(30 * 24 * time.Hour), // Expires in 30 days
+		HttpOnly: true,
+	})
+	return nil
+}
+
+// parseMealPlanForm extracts recipe counts and order from the POST form.
+func parseMealPlanForm(r *http.Request) (*MealPlanCookieData, error) {
+	if err := r.ParseForm(); err != nil {
+		return nil, fmt.Errorf("failed to parse form: %w", err)
+	}
+
+	cookieData := &MealPlanCookieData{
+		Counts: make(map[int]int),
+		Order:  make([]string, 7),
+	}
+
+	re := regexp.MustCompile(`^count_(\d+)$`)
+	for key, values := range r.PostForm {
+		if len(values) == 0 {
+			continue
+		}
+		if matches := re.FindStringSubmatch(key); len(matches) == 2 {
+			recipeID, _ := strconv.Atoi(matches[1])
+			count, err := strconv.Atoi(values[0])
+			if err == nil && count > 0 {
+				cookieData.Counts[recipeID] = count
+			}
+		}
+	}
+
+	orderParts := strings.Split(r.PostFormValue("meal_order"), ",")
+	for i := 0; i < 7; i++ {
+		if i < len(orderParts) && orderParts[i] != "" {
+			recipeID, _ := strconv.Atoi(orderParts[i])
+			if _, ok := cookieData.Counts[recipeID]; ok {
+				cookieData.Order[i] = orderParts[i]
+			}
+		}
+	}
+	return cookieData, nil
+}
+
 func clearMealPlanCookie(w http.ResponseWriter, cookieName string) {
-		http.SetCookie(w, &http.Cookie{
-			Name:     cookieName,
-			Value:    "",
-			Path:     "/",
-			Expires:  time.Unix(0, 0),
-			HttpOnly: true,
-		})
+	http.SetCookie(w, &http.Cookie{
+		Name:     cookieName,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+	})
 }
 
 func importRecipePageHandler(w http.ResponseWriter, r *http.Request) {
@@ -779,9 +889,15 @@ func renderMealPlanTemplate(w http.ResponseWriter, data MealPlanPageData) {
 
 // consolidateIngredients fetches ingredients for selected recipes and consolidates them.
 func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
+	// map[IngredientName]TotalInBaseUnit (teaspoons)
+	consolidatedConvertible := make(map[string]float64)
+	// map[IngredientName]TotalInBaseUnit (grams)
+	consolidatedWeightConvertible := make(map[string]float64)
+	// For units we can't convert, but amounts are numeric (e.g. "2 cloves")
 	// map[IngredientName]map[Measurement]Amount
-	consolidated := make(map[string]map[string]float64)
-	var shoppingList []db.Ingredient
+	consolidatedOther := make(map[string]map[string]float64)
+	// For ingredients where amount is not a number (e.g. "a pinch")
+	var nonNumericShoppingList []db.Ingredient
 
 	for id, countMultiplier := range recipeCounts {
 		recipe, err := db.FetchRecipeByID(id)
@@ -794,44 +910,78 @@ func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 		}
 
 		for _, ing := range recipe.Ingredients {
-			amount, err := strconv.ParseFloat(ing.Amount, 64)
-			if err != nil {
-				// Could not parse amount, so we can't aggregate it.
-				// Add it to the shopping list as-is for each time the recipe is included.
-				for i := 0; i < countMultiplier; i++ {
-					shoppingList = append(shoppingList, ing)
-				}
-				continue // Move to the next ingredient
-			}
-
-			totalAmount := amount * float64(countMultiplier)
-
-			// Normalize name and measurement for better consolidation.
 			name := strings.ToLower(strings.TrimSpace(ing.Name))
 			measurement := strings.ToLower(strings.TrimSpace(ing.Measurement))
 
-			// Simple singularization for common units (e.g., cups -> cup)
-			if len(measurement) > 1 && strings.HasSuffix(measurement, "s") {
-				measurement = strings.TrimSuffix(measurement, "s")
+			amount, err := strconv.ParseFloat(ing.Amount, 64)
+			if err != nil {
+				// Amount is not a number, e.g., "a pinch", "to taste".
+				// Add it to the list for each instance in the plan.
+				for i := 0; i < countMultiplier; i++ {
+					nonNumericShoppingList = append(nonNumericShoppingList, ing)
+				}
+				continue
 			}
 
-			if _, ok := consolidated[name]; !ok {
-				consolidated[name] = make(map[string]float64)
+			volumeConversionFactor, isVolumeConvertible := unitConversions[measurement]
+			weightConversionFactor, isWeightConvertible := weightConversions[measurement]
+
+			if isVolumeConvertible {
+				// Unit is convertible, add to the base unit total.
+				totalAmountInBaseUnit := amount * float64(countMultiplier) * volumeConversionFactor
+				consolidatedConvertible[name] += totalAmountInBaseUnit
+			} else if isWeightConvertible {
+				// Unit is convertible by weight, add to the base unit total.
+				totalAmountInBaseUnit := amount * float64(countMultiplier) * weightConversionFactor
+				consolidatedWeightConvertible[name] += totalAmountInBaseUnit
+			} else {
+				// Unit is not convertible (e.g., "cloves", "slices"), but amount is numeric.
+				// Consolidate by name and exact measurement string.
+				if _, ok := consolidatedOther[name]; !ok {
+					consolidatedOther[name] = make(map[string]float64)
+				}
+				consolidatedOther[name][ing.Measurement] += amount * float64(countMultiplier)
 			}
-			consolidated[name][measurement] += totalAmount
 		}
 	}
 
-	for name, measurementMap := range consolidated {
+	var shoppingList []db.Ingredient
+
+	// Process convertible volume ingredients, formatting them to the best unit.
+	for name, totalTeaspoons := range consolidatedConvertible {
+		amountStr, measurementStr := formatAmount(totalTeaspoons)
+		shoppingList = append(shoppingList, db.Ingredient{
+			Name:        strings.Title(name),
+			Amount:      amountStr,
+			Measurement: measurementStr,
+		})
+	}
+
+	// Process convertible weight ingredients, formatting them to the best unit.
+	for name, totalGrams := range consolidatedWeightConvertible {
+		amountStr, measurementStr := formatWeightAmount(totalGrams)
+		shoppingList = append(shoppingList, db.Ingredient{
+			Name:        strings.Title(name),
+			Amount:      amountStr,
+			Measurement: measurementStr,
+		})
+	}
+
+	// Process other numeric ingredients that weren't convertible.
+	for name, measurementMap := range consolidatedOther {
 		for measurement, amount := range measurementMap {
 			shoppingList = append(shoppingList, db.Ingredient{
 				Name:        strings.Title(name), // Capitalize for display
 				Measurement: measurement,
-				Amount:      strconv.FormatFloat(amount, 'f', -1, 64),
+				Amount:      strconv.FormatFloat(amount, 'f', -1, 64), // -1 for fewest digits
 			})
 		}
 	}
 
+	// Add the non-numeric ingredients to the final list.
+	shoppingList = append(shoppingList, nonNumericShoppingList...)
+
+	// Sort the final list for consistent display.
 	sort.Slice(shoppingList, func(i, j int) bool {
 		if shoppingList[i].Name != shoppingList[j].Name {
 			return shoppingList[i].Name < shoppingList[j].Name
@@ -840,6 +990,74 @@ func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 	})
 
 	return shoppingList, nil
+}
+
+// formatAmount converts a total amount in a base unit (teaspoons) to a human-readable
+// amount and unit (e.g., 48 tsp -> "1", "cup").
+func formatAmount(totalTeaspoons float64) (string, string) {
+	// For very small amounts, show them as fractions of a teaspoon.
+	if totalTeaspoons < 1.0 {
+		if totalTeaspoons >= 0.74 && totalTeaspoons < 0.76 {
+			return "3/4", "teaspoon"
+		}
+		if totalTeaspoons >= 0.49 && totalTeaspoons < 0.51 {
+			return "1/2", "teaspoon"
+		}
+		if totalTeaspoons >= 0.24 && totalTeaspoons < 0.26 {
+			return "1/4", "teaspoon"
+		}
+		return strconv.FormatFloat(totalTeaspoons, 'f', 2, 64), "teaspoons"
+	}
+
+	for _, unit := range orderedUnits {
+		// Check if the total is large enough to be represented in this unit.
+		if totalTeaspoons >= unit.Value {
+			amountInUnit := totalTeaspoons / unit.Value
+
+			// Format to a reasonable number of decimal places, then clean it up.
+			formattedAmount := strconv.FormatFloat(amountInUnit, 'f', 2, 64)
+			formattedAmount = strings.TrimSuffix(formattedAmount, ".00")
+			formattedAmount = strings.TrimSuffix(formattedAmount, ".0")
+
+			unitName := unit.Name
+			// Check for pluralization, avoiding floating point comparison issues.
+			if amountInUnit > 1.001 {
+				unitName += "s"
+			}
+			return formattedAmount, unitName
+		}
+	}
+
+	// This should not be reached if orderedUnits includes "teaspoon", but it's a good fallback.
+	return strconv.FormatFloat(totalTeaspoons, 'f', -1, 64), "teaspoons"
+}
+
+// formatWeightAmount converts a total amount in a base unit (grams) to a human-readable
+// amount and unit (e.g., 1200g -> "1.2", "kg").
+func formatWeightAmount(totalGrams float64) (string, string) {
+	for _, unit := range orderedWeightUnits {
+		// Use a small tolerance to handle floating point inaccuracies
+		if totalGrams >= unit.Value-0.001 {
+			amountInUnit := totalGrams / unit.Value
+
+			// Format to a reasonable number of decimal places, then clean it up.
+			formattedAmount := strconv.FormatFloat(amountInUnit, 'f', 2, 64)
+			formattedAmount = strings.TrimSuffix(formattedAmount, ".00")
+			formattedAmount = strings.TrimSuffix(formattedAmount, ".0")
+
+			unitName := unit.Name
+			// Check for pluralization, avoiding floating point comparison issues.
+			// Special case for 'kg' which doesn't pluralize with 's'.
+			if amountInUnit > 1.001 && unit.Name != "kg" {
+				unitName += "s"
+			}
+			return formattedAmount, unitName
+		}
+	}
+
+	// Fallback for values less than the smallest unit in the ordered list (e.g., < 1 gram).
+	formattedAmount := strconv.FormatFloat(totalGrams, 'f', 2, 64)
+	return formattedAmount, "g"
 }
 
 func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {

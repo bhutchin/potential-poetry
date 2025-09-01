@@ -1,1 +1,4 @@
 site.log
+
+# Ignore SSL certificates generated for local development
+/certs/
