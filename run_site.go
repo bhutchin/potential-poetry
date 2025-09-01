@@ -169,11 +169,49 @@ func (j *JSONLDInstruction) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// JSONLDIngredient represents an ingredient in JSON-LD, which can be a string or an object.
+type JSONLDIngredient struct {
+	Name        string
+	Amount      string
+	Measurement string
+}
+
+// UnmarshalJSON allows JSONLDIngredient to be parsed from a simple string
+// or a structured object.
+func (j *JSONLDIngredient) UnmarshalJSON(data []byte) error {
+	// Try to unmarshal as a string first. This maintains backward compatibility
+	// with the standard schema.org format.
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		parsed := parseIngredientString(s)
+		j.Name = parsed.Name
+		j.Amount = parsed.Amount
+		j.Measurement = parsed.Measurement
+		return nil
+	}
+
+	// If it's not a string, unmarshal as our custom structured object.
+	// We use a temporary struct to avoid recursive calls to UnmarshalJSON.
+	var a struct {
+		Name        string `json:"name"`
+		Quantity    string `json:"quantity"`
+		Measurement string `json:"measurement"`
+	}
+	if err := json.Unmarshal(data, &a); err != nil {
+		return fmt.Errorf("ingredient must be a string or a structured object: %w", err)
+	}
+
+	j.Name = a.Name
+	j.Amount = a.Quantity // Map from "quantity" to our internal "Amount"
+	j.Measurement = a.Measurement
+	return nil
+}
+
 // JSONLDRecipe represents the structure of a Recipe in JSON-LD format.
 type JSONLDRecipe struct {
 	Type               interface{}         `json:"@type"`
 	Name               string              `json:"name"`
-	RecipeIngredient   []string            `json:"recipeIngredient"`
+	RecipeIngredient   []JSONLDIngredient  `json:"recipeIngredient"`
 	RecipeInstructions []JSONLDInstruction `json:"recipeInstructions"`
 	Keywords           string              `json:"keywords"`
 }
@@ -956,8 +994,12 @@ func convertJSONLDToRecipe(ld JSONLDRecipe) *db.Recipe {
 		Title: ld.Name,
 	}
 
-	for _, ingStr := range ld.RecipeIngredient {
-		recipe.Ingredients = append(recipe.Ingredients, parseIngredientString(ingStr))
+	for _, ing := range ld.RecipeIngredient {
+		recipe.Ingredients = append(recipe.Ingredients, db.Ingredient{
+			Name:        ing.Name,
+			Amount:      ing.Amount,
+			Measurement: ing.Measurement,
+		})
 	}
 
 	for i, inst := range ld.RecipeInstructions {

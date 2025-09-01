@@ -8,7 +8,7 @@
 <body>
     <div class="content-container">
         <h1>Import Recipe from JSON</h1>
-        <p>Paste the JSON-LD data for a recipe below. This is a structured data format used by many modern recipe websites.</p>
+        <p>Paste the JSON-LD data for a recipe below. You can use structured ingredients (with name, quantity, measurement) or simple strings.</p>
 
         <form action="/handle-import" method="post" class="import-form">
             <div class="form-group">
@@ -25,9 +25,9 @@
   "@type": "Recipe",
   "name": "Sample Recipe Title",
   "recipeIngredient": [
-    "1 cup flour",
-    "2 large eggs",
-    "1/2 tsp salt"
+    { "name": "all-purpose flour", "quantity": "1", "measurement": "cup" },
+    { "name": "large eggs", "quantity": "2", "measurement": "" },
+    { "name": "salt", "quantity": "0.5", "measurement": "tsp" }
   ],
   "recipeInstructions": [
     { "@type": "HowToStep", "text": "First step description." },
