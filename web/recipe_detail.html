@@ -54,6 +54,9 @@
 
             <div class="form-actions">
                 <a href="/recipe/edit/{{.Recipe.ID}}" class="edit-button">Edit Recipe</a>
+                <form action="/recipe/duplicate/{{.Recipe.ID}}" method="post" class="duplicate-form">
+                    <button type="submit" class="duplicate-button">Duplicate Recipe</button>
+                </form>
                 <form action="/recipe/delete/{{.Recipe.ID}}" method="post" class="delete-form" onsubmit="return confirm('Are you sure you want to delete this recipe?');">
                     <button type="submit" class="remove-button">Delete Recipe</button>
                 </form>

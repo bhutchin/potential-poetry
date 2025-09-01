@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"net/url"
 	"log"
 	"net/http"
 	"os"
@@ -15,8 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/PuerkitoBio/goquery"
 	"github.com/gorilla/mux"
 )
 
@@ -52,9 +51,31 @@ type MealPlanPageData struct {
 	RecipeCounts map[int]int // Map of Recipe ID to its count in the meal plan
 	ShoppingList []db.Ingredient
 	MealOrder    []string
+	SavedPlans   []db.MealPlanInfo
 }
 
 const mealPlanCookieName = "meal-plan-recipes"
+
+// allUnits is a list of all known measurement units, sorted by length descending.
+// This is used for parsing ingredient strings. It is populated at startup.
+var allUnits []string
+
+func init() {
+	// Populate allUnits from the conversion maps for ingredient parsing.
+	for unit := range unitConversions {
+		allUnits = append(allUnits, unit)
+	}
+	for unit := range weightConversions {
+		// Avoid duplicates
+		if _, exists := unitConversions[unit]; !exists {
+			allUnits = append(allUnits, unit)
+		}
+	}
+	// Sort by length descending to match longer units first (e.g., "fluid ounce" before "ounce").
+	sort.Slice(allUnits, func(i, j int) bool {
+		return len(allUnits[i]) > len(allUnits[j])
+	})
+}
 
 // unitConversions maps various unit names to their equivalent value in the base unit (teaspoons).
 var unitConversions = map[string]float64{
@@ -185,9 +206,13 @@ func main() {
 	r.HandleFunc("/recipe/edit/{id:[0-9]+}", logRequest(editRecipePageHandler)).Methods("GET")
 	r.HandleFunc("/recipe/update/{id:[0-9]+}", logRequest(updateRecipeHandler)).Methods("POST")
 	r.HandleFunc("/recipe/delete/{id:[0-9]+}", logRequest(deleteRecipeHandler)).Methods("POST")
+	r.HandleFunc("/recipe/duplicate/{id:[0-9]+}", logRequest(duplicateRecipeHandler)).Methods("POST")
 	r.HandleFunc("/recipes/tag/{tag}", logRequest(recipesByTagHandler)).Methods("GET")
 	r.HandleFunc("/meal-plan", logRequest(mealPlanHandler)).Methods("GET", "POST")
 	r.HandleFunc("/meal-plan/print", logRequest(printShoppingListHandler)).Methods("GET")
+	r.HandleFunc("/meal-plan/save", logRequest(saveMealPlanHandler)).Methods("POST")
+	r.HandleFunc("/meal-plan/load/{id:[0-9]+}", logRequest(loadMealPlanHandler)).Methods("GET")
+	r.HandleFunc("/meal-plan/delete/{id:[0-9]+}", logRequest(deleteMealPlanHandler)).Methods("POST")
 
 	certFile := "certs/cert.pem"
 	keyFile := "certs/key.pem"
@@ -270,33 +295,11 @@ func genericFileHandler(filePath string) http.HandlerFunc {
 }
 
 func submitRecipePageHandler(w http.ResponseWriter, r *http.Request) {
-	const importedRecipeCookieName = "imported-recipe"
 	data := SubmitPageData{
 		// Provide an empty Recipe struct for a new submission form.
 		Recipe: &db.Recipe{},
 	}
 
-	// Check if we are loading an imported recipe from the cookie
-	if r.URL.Query().Get("source") == "import" {
-		if cookie, err := r.Cookie(importedRecipeCookieName); err == nil {
-			// Clear the cookie immediately so it's only used once
-			http.SetCookie(w, &http.Cookie{
-				Name:     importedRecipeCookieName,
-				Value:    "",
-				Path:     "/",
-				Expires:  time.Unix(0, 0),
-				HttpOnly: true,
-			})
-
-			var recipe db.Recipe
-			if err := json.Unmarshal([]byte(cookie.Value), &recipe); err == nil {
-				data.Recipe = &recipe
-				log.Printf("Loaded imported recipe '%s' for review.", recipe.Title)
-			} else {
-				log.Printf("Error unmarshalling imported recipe from cookie: %v", err)
-			}
-		}
-	}
 	tmpl, err := template.ParseFiles("web/submit_recipe.html")
 	if err != nil {
 		log.Printf("Error parsing template: %v", err)
@@ -435,6 +438,31 @@ func deleteRecipeHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/recipes", http.StatusSeeOther)
 }
 
+func duplicateRecipeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	vars := mux.Vars(r)
+	id, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	newRecipeID, err := db.DuplicateRecipeByID(id)
+	if err != nil {
+		log.Printf("Error duplicating recipe %d: %v", id, err)
+		http.Error(w, "Failed to duplicate recipe", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Successfully duplicated recipe %d into new recipe %d.", id, newRecipeID)
+	// Redirect to the edit page of the new recipe.
+	http.Redirect(w, r, fmt.Sprintf("/recipe/edit/%d", newRecipeID), http.StatusSeeOther)
+}
+
 func recipeDetailHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	idStr := vars["id"]
@@ -571,11 +599,50 @@ func handleViewMealPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := MealPlanPageData{
-		AllRecipes:   allRecipes,
-		RecipeCounts: recipeCounts,
-		ShoppingList: shoppingList,
-		MealOrder:    mealOrder,
+	// --- Pagination for Saved Plans ---
+	const plansPerPage = 5
+	pageStr := r.URL.Query().Get("page")
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * plansPerPage
+
+	totalPlans, err := db.CountSavedMealPlans()
+	if err != nil {
+		log.Printf("Error counting saved meal plans: %v", err)
+		http.Error(w, "Failed to load saved plans", http.StatusInternalServerError)
+		return
+	}
+
+	sortOrder := r.URL.Query().Get("sort")
+	if sortOrder == "" {
+		sortOrder = "name_asc" // Default sort order
+	}
+
+	savedPlans, err := db.ListSavedMealPlans(sortOrder, plansPerPage, offset)
+	if err != nil {
+		log.Printf("Error fetching saved meal plans: %v", err)
+		// Non-fatal, just won't show the list
+	}
+
+	totalPages := (totalPlans + plansPerPage - 1) / plansPerPage
+
+	data := struct {
+		MealPlanPageData
+		URL              *url.URL
+		SortOrder        string
+		PlansCurrentPage int
+		PlansTotalPages  int
+		PlansHasNext     bool
+		PlansHasPrev     bool
+		PlansNextPage    int
+		PlansPrevPage    int
+	}{
+		MealPlanPageData: MealPlanPageData{
+			AllRecipes: allRecipes, RecipeCounts: recipeCounts, ShoppingList: shoppingList, MealOrder: mealOrder, SavedPlans: savedPlans,
+		},
+		URL: r.URL, SortOrder: sortOrder, PlansCurrentPage: page, PlansTotalPages: totalPages, PlansHasNext: page < totalPages, PlansHasPrev: page > 1, PlansNextPage: page + 1, PlansPrevPage: page - 1,
 	}
 	renderMealPlanTemplate(w, data)
 }
@@ -614,6 +681,63 @@ func printShoppingListHandler(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, "web/print_shopping_list.html", data)
 }
 
+func saveMealPlanHandler(w http.ResponseWriter, r *http.Request) {
+	planName := r.PostFormValue("planName")
+	if planName == "" {
+		http.Error(w, "Plan name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get current plan from cookie
+	cookie, err := r.Cookie(mealPlanCookieName)
+	if err != nil || cookie.Value == "" {
+		http.Error(w, "No active meal plan to save", http.StatusBadRequest)
+		return
+	}
+
+	// The cookie value is base64 encoded JSON. We need to decode it before saving to the JSONB column.
+	decodedCookieValue, err := base64.StdEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		http.Error(w, "Invalid meal plan data in cookie", http.StatusBadRequest)
+		return
+	}
+
+	if err := db.SaveNamedMealPlan(planName, string(decodedCookieValue)); err != nil {
+		log.Printf("Error saving named meal plan: %v", err)
+		http.Error(w, "Failed to save meal plan", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/meal-plan?saved=true", http.StatusSeeOther)
+}
+
+func loadMealPlanHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, _ := strconv.Atoi(vars["id"])
+
+	planDataJSON, err := db.LoadNamedMealPlan(id)
+	if err != nil {
+		log.Printf("Error loading named meal plan: %v", err)
+		http.Error(w, "Failed to load meal plan", http.StatusInternalServerError)
+		return
+	}
+
+	// The data from DB is JSON. We need to base64 encode it for the cookie.
+	encodedValue := base64.StdEncoding.EncodeToString([]byte(planDataJSON))
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     mealPlanCookieName,
+		Value:    encodedValue,
+		Path:     "/",
+		Expires:  time.Now().Add(30 * 24 * time.Hour),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   true,
+	})
+
+	http.Redirect(w, r, "/meal-plan?loaded=true", http.StatusSeeOther)
+}
+
 // handleUpdateMealPlan handles POST requests to update the meal plan cookie.
 func handleUpdateMealPlan(w http.ResponseWriter, r *http.Request) {
 	cookieData, err := parseMealPlanForm(r)
@@ -630,6 +754,19 @@ func handleUpdateMealPlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
+}
+
+func deleteMealPlanHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, _ := strconv.Atoi(vars["id"])
+
+	if err := db.DeleteNamedMealPlan(id); err != nil {
+		log.Printf("Error deleting named meal plan: %v", err)
+		http.Error(w, "Failed to delete meal plan", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/meal-plan?deleted=true", http.StatusSeeOther)
 }
 
 // getMealPlanFromCookie reads, decodes, and unmarshals the meal plan data from the cookie.
@@ -682,6 +819,8 @@ func setMealPlanCookie(w http.ResponseWriter, data *MealPlanCookieData) error {
 		Path:     "/",
 		Expires:  time.Now().Add(30 * 24 * time.Hour), // Expires in 30 days
 		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   true,
 	})
 	return nil
 }
@@ -730,6 +869,8 @@ func clearMealPlanCookie(w http.ResponseWriter, cookieName string) {
 		Path:     "/",
 		Expires:  time.Unix(0, 0),
 		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   true,
 	})
 }
 
@@ -738,81 +879,60 @@ func importRecipePageHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleImportHandler(w http.ResponseWriter, r *http.Request) {
-	const importedRecipeCookieName = "imported-recipe"
-	url := r.PostFormValue("recipeUrl")
-	if url == "" {
-		http.Error(w, "URL is required", http.StatusBadRequest)
-		return
-	}
-
-	res, err := http.Get(url)
-	if err != nil {
-		log.Printf("Error fetching URL %s: %v", url, err)
-		http.Error(w, "Failed to fetch the recipe URL.", http.StatusInternalServerError)
-		return
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode != 200 {
-		log.Printf("URL %s returned status code %d", url, res.StatusCode)
-		http.Error(w, fmt.Sprintf("Failed to fetch the recipe URL (status: %d).", res.StatusCode), http.StatusInternalServerError)
-		return
-	}
-
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	if err != nil {
-		log.Printf("Error parsing HTML from %s: %v", url, err)
-		http.Error(w, "Failed to parse the recipe page.", http.StatusInternalServerError)
+	jsonStr := r.PostFormValue("recipeJson")
+	if jsonStr == "" {
+		http.Error(w, "JSON data is required", http.StatusBadRequest)
 		return
 	}
 
 	var recipe *db.Recipe
-	doc.Find("script[type=\"application/ld+json\"]").EachWithBreak(func(i int, s *goquery.Selection) bool {
-		var ldData []JSONLDRecipe
-		// JSON-LD can be a single object or an array of objects. Try array first.
-		if err := json.Unmarshal([]byte(s.Text()), &ldData); err == nil {
-			for _, item := range ldData {
-				if isRecipeType(item.Type) {
-					recipe = convertJSONLDToRecipe(item)
-					return false // Stop searching
-				}
-			}
-		} else {
-			// If array fails, try a single object.
-			var singleLDData JSONLDRecipe
-			if err := json.Unmarshal([]byte(s.Text()), &singleLDData); err == nil {
-				if isRecipeType(singleLDData.Type) {
-					recipe = convertJSONLDToRecipe(singleLDData)
-					return false // Stop searching
-				}
+	var ldData []JSONLDRecipe
+	// JSON-LD can be a single object or an array of objects. Try array first.
+	if err := json.Unmarshal([]byte(jsonStr), &ldData); err == nil {
+		for _, item := range ldData {
+			if isRecipeType(item.Type) {
+				recipe = convertJSONLDToRecipe(item)
+				break // Found a recipe, stop searching
 			}
 		}
-		return true // Continue searching
-	})
+	} else {
+		// If array fails, try a single object.
+		var singleLDData JSONLDRecipe
+		if err := json.Unmarshal([]byte(jsonStr), &singleLDData); err == nil {
+			if isRecipeType(singleLDData.Type) {
+				recipe = convertJSONLDToRecipe(singleLDData)
+			}
+		} else {
+			// If both fail, it's invalid JSON
+			log.Printf("Error unmarshalling imported JSON: %v", err)
+			http.Error(w, "Invalid JSON format. Please ensure you are pasting valid JSON-LD.", http.StatusBadRequest)
+			return
+		}
+	}
 
 	if recipe == nil {
-		log.Printf("No recipe JSON-LD found on %s", url)
-		http.Error(w, "Could not find a recipe on that page. This feature works best with sites that use modern recipe standards (JSON-LD).", http.StatusUnprocessableEntity)
+		log.Printf("No recipe object found in the provided JSON")
+		http.Error(w, "Could not find a valid recipe object in the provided JSON.", http.StatusUnprocessableEntity)
 		return
 	}
 
-	recipeJSON, err := json.Marshal(recipe)
+	// Extract tags from the recipe struct to pass to SaveRecipe
+	var tags []string
+	for _, cat := range recipe.Categories {
+		tags = append(tags, cat.Name)
+	}
+
+	// Save the parsed recipe to the database.
+	newRecipeID, err := db.SaveRecipe(recipe.Title, recipe.Ingredients, recipe.Method, tags)
 	if err != nil {
-		log.Printf("Error marshalling scraped recipe to JSON: %v", err)
-		http.Error(w, "Failed to process scraped recipe.", http.StatusInternalServerError)
+		log.Printf("Error saving imported recipe to database: %v", err)
+		http.Error(w, "Failed to save imported recipe", http.StatusInternalServerError)
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     importedRecipeCookieName,
-		Value:    string(recipeJSON),
-		Path:     "/",
-		Expires:  time.Now().Add(10 * time.Minute), // Short-lived cookie
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
-
-	http.Redirect(w, r, "/submit_recipe?source=import", http.StatusSeeOther)
+	log.Printf("Successfully imported recipe '%s' into new recipe %d.", recipe.Title, newRecipeID)
+	// Redirect to the edit page of the new recipe.
+	http.Redirect(w, r, fmt.Sprintf("/recipe/edit/%d", newRecipeID), http.StatusSeeOther)
 }
 
 // isRecipeType checks if a JSON-LD object's type field indicates it's a recipe.
@@ -837,7 +957,7 @@ func convertJSONLDToRecipe(ld JSONLDRecipe) *db.Recipe {
 	}
 
 	for _, ingStr := range ld.RecipeIngredient {
-		recipe.Ingredients = append(recipe.Ingredients, db.Ingredient{Name: ingStr})
+		recipe.Ingredients = append(recipe.Ingredients, parseIngredientString(ingStr))
 	}
 
 	for i, inst := range ld.RecipeInstructions {
@@ -856,6 +976,81 @@ func convertJSONLDToRecipe(ld JSONLDRecipe) *db.Recipe {
 	return recipe
 }
 
+// normalizeAmount converts a string amount (potentially a fraction) into a clean float string.
+func normalizeAmount(amountStr string) string {
+	amountStr = strings.TrimSpace(amountStr)
+	// Handle mixed numbers like "1 1/2"
+	if strings.Contains(amountStr, " ") && strings.Contains(amountStr, "/") {
+		parts := strings.Split(amountStr, " ")
+		if len(parts) == 2 {
+			whole, err1 := strconv.ParseFloat(parts[0], 64)
+			fracParts := strings.Split(parts[1], "/")
+			if len(fracParts) == 2 {
+				num, err2 := strconv.ParseFloat(fracParts[0], 64)
+				den, err3 := strconv.ParseFloat(fracParts[1], 64)
+				if err1 == nil && err2 == nil && err3 == nil && den != 0 {
+					return strconv.FormatFloat(whole+num/den, 'f', -1, 64)
+				}
+			}
+		}
+	}
+	// Handle fractions like "1/2"
+	if strings.Contains(amountStr, "/") && !strings.Contains(amountStr, " ") {
+		fracParts := strings.Split(amountStr, "/")
+		if len(fracParts) == 2 {
+			num, err1 := strconv.ParseFloat(fracParts[0], 64)
+			den, err2 := strconv.ParseFloat(fracParts[1], 64)
+			if err1 == nil && err2 == nil && den != 0 {
+				return strconv.FormatFloat(num/den, 'f', -1, 64)
+			}
+		}
+	}
+	// It's probably a decimal or integer already, just return it.
+	return amountStr
+}
+
+// parseIngredientString attempts to split a raw ingredient string into amount, measurement, and name.
+func parseIngredientString(ingStr string) db.Ingredient {
+	// Regex to find a leading number, including simple fractions and mixed numbers.
+	// e.g., "2", "1.5", "1/2", "1 1/2"
+	re := regexp.MustCompile(`^(\d+\s+\d/\d|\d+/\d|\d*\.\d+|\d+)`)
+	originalStr := strings.TrimSpace(ingStr)
+
+	amountMatch := re.FindString(originalStr)
+
+	if amountMatch == "" {
+		// No numeric amount found, the whole string is the name.
+		return db.Ingredient{Name: originalStr}
+	}
+
+	amountStr := normalizeAmount(amountMatch)
+	remainingStr := strings.TrimSpace(originalStr[len(amountMatch):])
+
+	// Check for a known unit of measurement.
+	for _, unit := range allUnits {
+		// Check for "cup " or an exact match "cup"
+		if strings.HasPrefix(strings.ToLower(remainingStr), unit+" ") || strings.ToLower(remainingStr) == unit {
+			measurement := unit
+			name := strings.TrimSpace(remainingStr[len(unit):])
+			// Clean up common leading characters like "of"
+			name = strings.TrimPrefix(name, "of ")
+			return db.Ingredient{
+				Amount:      amountStr,
+				Measurement: measurement,
+				Name:        name,
+			}
+		}
+	}
+
+	// No known unit found. The rest of the string is the name.
+	// e.g., "2 large eggs" -> Amount: "2", Name: "large eggs"
+	return db.Ingredient{
+		Amount:      amountStr,
+		Measurement: "",
+		Name:        remainingStr,
+	}
+}
+
 func renderTemplate(w http.ResponseWriter, templateFile string, data interface{}) {
 	tmpl, err := template.ParseFiles(templateFile)
 	if err != nil {
@@ -872,7 +1067,7 @@ func renderTemplate(w http.ResponseWriter, templateFile string, data interface{}
 	}
 }
 
-func renderMealPlanTemplate(w http.ResponseWriter, data MealPlanPageData) {
+func renderMealPlanTemplate(w http.ResponseWriter, data interface{}) {
 	tmpl, err := template.ParseFiles("web/meal_plan.html")
 	if err != nil {
 		log.Printf("Error parsing meal plan template: %v", err)

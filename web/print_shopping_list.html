@@ -106,6 +106,18 @@
             background-color: #9E9E9E; /* A neutral grey */
             cursor: not-allowed;
         }
+        .return-button {
+            padding: 10px 20px;
+            background-color: #616161; /* A neutral grey */
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 1em;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .return-button:hover {
+            background-color: #424242;
+        }
     </style>
 </head>
 <body>
@@ -123,6 +135,7 @@
             <p>Your shopping list is empty.</p>
         {{end}}
         <div class="print-actions no-print">
+            <a href="/meal-plan" class="return-button">Return to Meal Plan</a>
             <button id="copy-button" class="copy-button">Copy to Clipboard</button>
             <button onclick="window.print()" class="print-button">Print List</button>
         </div>

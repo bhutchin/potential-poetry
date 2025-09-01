@@ -9,10 +9,29 @@
     <div class="content-container">
         <h1>Meal Planner</h1>
 
+        {{if .URL.Query.Get "saved"}}
+        <div class="alert alert-success">
+            <strong>Success!</strong> Meal plan saved.
+        </div>
+        {{end}}
+        {{if .URL.Query.Get "loaded"}}
+        <div class="alert alert-success">
+            <strong>Success!</strong> Meal plan loaded.
+        </div>
+        {{end}}
+        {{if .URL.Query.Get "deleted"}}
+        <div class="alert alert-success">
+            <strong>Success!</strong> Saved meal plan deleted.
+        </div>
+        {{end}}
+
         <form action="/meal-plan" method="post" class="meal-plan-form">
 
             <h3 class="section-title">Select Meals</h3>
             <p>Set the quantity for each recipe you want in your meal plan. Set to 0 to remove.</p>
+            <div class="meal-plan-search-container">
+                <input type="text" id="recipe-search-input" placeholder="Search for a recipe to add...">
+            </div>
             <div class="recipe-selection-list">
                 {{range .AllRecipes}}
                 <div class="recipe-count-item">
@@ -20,7 +39,11 @@
                         <input type="checkbox" class="recipe-select-toggle" id="recipe_toggle_{{.ID}}" data-target-id="count_{{.ID}}" {{if gt (index $.RecipeCounts .ID) 0}}checked{{end}}>
                         <label for="recipe_toggle_{{.ID}}">{{.Title}}</label>
                     </div>
-                    <input type="number" name="count_{{.ID}}" value="{{index $.RecipeCounts .ID}}" min="0" id="count_{{.ID}}" class="recipe-count-input" {{if not (gt (index $.RecipeCounts .ID) 0)}}style="display: none;"{{end}}>
+                    <div class="custom-number-input" {{if not (gt (index $.RecipeCounts .ID) 0)}}style="display: none;"{{end}}>
+                        <button type="button" class="quantity-btn quantity-down" aria-label="Decrease quantity">-</button>
+                        <input type="number" name="count_{{.ID}}" value="{{index $.RecipeCounts .ID}}" min="0" id="count_{{.ID}}" class="recipe-count-input">
+                        <button type="button" class="quantity-btn quantity-up" aria-label="Increase quantity">+</button>
+                    </div>
                 </div>
                 {{end}}
             </div>
@@ -87,6 +110,59 @@
                 {{end}}
             </tbody>
         </table>
+        {{end}}
+
+        <h3 class="section-title">Saved Meal Plans</h3>
+
+        <!-- Sorting controls -->
+        <div class="list-controls">
+            <span>Sort by:</span>
+            <a href="/meal-plan?sort=name_asc" class="sort-link {{if eq .SortOrder "name_asc"}}active{{end}}">Name</a>
+            <a href="/meal-plan?sort=date_desc" class="sort-link {{if eq .SortOrder "date_desc"}}active{{end}}">Newest</a>
+            <a href="/meal-plan?sort=date_asc" class="sort-link {{if eq .SortOrder "date_asc"}}active{{end}}">Oldest</a>
+        </div>
+
+        <!-- Form to save the current plan -->
+        <form action="/meal-plan/save" method="post" class="save-plan-form">
+            <input type="text" name="planName" placeholder="Enter a name for the current plan..." required>
+            <button type="submit" class="submit-button">Save Current Plan</button>
+        </form>
+
+        <!-- List of saved plans -->
+        {{if .SavedPlans}}
+        <div class="saved-plans-list">
+            {{range .SavedPlans}}
+            <div class="saved-plan-item">
+                <span class="plan-name">{{.Name}}</span>
+                <div class="plan-actions">
+                    <a href="/meal-plan/load/{{.ID}}" class="load-button">Load</a>
+                    <form action="/meal-plan/delete/{{.ID}}" method="post" onsubmit="return confirm('Are you sure you want to delete this plan?');">
+                        <button type="submit" class="remove-button">Delete</button>
+                    </form>
+                </div>
+            </div>
+            {{end}}
+        </div>
+        {{else}}
+        <p>You have no saved meal plans.</p>
+        {{end}}
+
+        {{if gt .PlansTotalPages 1}}
+        <div class="pagination">
+            {{if .PlansHasPrev}}
+                <a href="/meal-plan?sort={{.SortOrder}}&page={{.PlansPrevPage}}" class="pagination-link">&laquo; Previous</a>
+            {{else}}
+                <span class="pagination-link disabled">&laquo; Previous</span>
+            {{end}}
+    
+            <span class="pagination-info">Page {{.PlansCurrentPage}} of {{.PlansTotalPages}}</span>
+    
+            {{if .PlansHasNext}}
+                <a href="/meal-plan?sort={{.SortOrder}}&page={{.PlansNextPage}}" class="pagination-link">Next &raquo;</a>
+            {{else}}
+                <span class="pagination-link disabled">Next &raquo;</span>
+            {{end}}
+        </div>
         {{end}}
     </div>
     <div class="page-footer-nav">
@@ -171,24 +247,60 @@
                 draggedItem = null;
             }
 
+            // --- Search/Filter for Recipe Selection ---
+            const searchInput = document.getElementById('recipe-search-input');
+            if (searchInput) {
+                searchInput.addEventListener('input', () => {
+                    const searchTerm = searchInput.value.toLowerCase().trim();
+                    const recipeItems = document.querySelectorAll('.recipe-selection-list .recipe-count-item');
+                    
+                    recipeItems.forEach(item => {
+                        const label = item.querySelector('label');
+                        if (label.textContent.toLowerCase().includes(searchTerm)) {
+                            item.style.display = 'flex'; // Use flex to match the original display style
+                        } else {
+                            item.style.display = 'none';
+                        }
+                    });
+                });
+            }
+
             // --- Event Listeners ---
             document.querySelectorAll('.recipe-select-toggle').forEach(checkbox => {
                 checkbox.addEventListener('change', function() {
                     const quantityInput = document.getElementById(this.dataset.targetId);
+                    const quantityContainer = quantityInput.parentElement;
                     const recipeId = this.id.replace('recipe_toggle_', '');
 
                     if (this.checked) {
-                        quantityInput.style.display = '';
+                        quantityContainer.style.display = 'flex';
                         if (quantityInput.value === '0') {
                             quantityInput.value = '1';
                         }
                         addMealToPlan(recipeId, quantityInput.value);
                     } else {
-                        quantityInput.style.display = 'none';
+                        quantityContainer.style.display = 'none';
                         quantityInput.value = '0';
                         removeMealFromPlan(recipeId);
                     }
                 });
+            });
+
+            document.querySelector('.recipe-selection-list').addEventListener('click', (e) => {
+                if (e.target.matches('.quantity-btn')) {
+                    const container = e.target.parentElement;
+                    const input = container.querySelector('.recipe-count-input');
+                    if (!input) return;
+
+                    let value = parseInt(input.value, 10) || 0;
+
+                    if (e.target.classList.contains('quantity-up')) {
+                        value++;
+                    } else if (e.target.classList.contains('quantity-down') && value > 0) {
+                        value--;
+                    }
+                    input.value = value;
+                }
             });
 
             document.querySelectorAll('.day-drop-zone').forEach(zone => {

@@ -78,6 +78,8 @@ body {
     cursor: pointer;
     margin-top: 20px;
     transition: background-color 0.2s ease-in-out;
+    font-size: 16px;
+    font-weight: bold;
 }
 
 .submit-button:hover {
@@ -207,13 +209,12 @@ body {
     background-color: #f44336; /* A standard 'danger' red */
     color: white;
     border: none;
-    /* Adjust padding to match the height of the text inputs */
-    padding: 11px 15px;
-    box-sizing: border-box;
+    padding: 10px 20px;
     border-radius: 4px; /* Softer edges */
     cursor: pointer;
     font-weight: bold;
     transition: background-color 0.2s ease-in-out;
+    font-size: 16px;
 }
 
 .remove-button:hover {
@@ -315,7 +316,8 @@ body {
     gap: 10px;
 }
 
-.delete-form {
+.delete-form,
+.duplicate-form {
     margin: 0;
     padding: 0;
     border: none;
@@ -324,18 +326,34 @@ body {
 
 .edit-button {
     display: inline-block;
-    padding: 11px 15px;
+    padding: 10px 20px;
     background-color: #2196F3;
     color: white;
     text-decoration: none;
     border-radius: 4px;
     font-weight: bold;
     transition: background-color 0.2s ease-in-out;
-    line-height: 1.5; /* Align with button text */
+    font-size: 16px;
 }
 
 .edit-button:hover {
     background-color: #1976D2;
+}
+
+.duplicate-button {
+    padding: 10px 20px;
+    background-color: #9C27B0; /* Purple, matches meal planner nav button */
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 16px;
+    transition: background-color 0.2s ease-in-out;
+}
+
+.duplicate-button:hover {
+    background-color: #7B1FA2; /* Darker purple */
 }
 
 /* Home Page Specific Styles */
@@ -403,18 +421,32 @@ body {
 }
 
 .search-button {
-    padding: 10px 20px;
+    padding: 12px 25px; /* Match nav-button for consistent size */
     background-color: #2196F3;
     color: white;
     border: none;
-    border-radius: 4px;
+    border-radius: 5px; /* Match border-radius of nav-button */
     cursor: pointer;
     font-size: 16px;
+    font-weight: bold; /* Match nav-button for consistent style */
     transition: background-color 0.2s ease-in-out;
 }
 
 .search-button:hover {
     background-color: #1976D2;
+}
+
+/* Container for header actions on list pages (e.g., search and add button) */
+.page-header-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+}
+
+.page-header-actions .search-form {
+    flex-grow: 1;
+    margin-bottom: 0; /* Override default margin */
 }
 
 /* Pagination Styles */
@@ -474,14 +506,14 @@ body {
 
 .recipe-selection-list {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 15px;
     margin-bottom: 20px;
 }
 
 .recipe-count-item {
     background-color: #2C2C2C;
-    padding: 10px 15px;
+    padding: 15px;
     border-radius: 5px;
     border: 1px solid #3A3A3A;
     display: flex;
@@ -501,7 +533,9 @@ body {
     display: flex;
     align-items: center;
     gap: 12px;
-    flex-grow: 1; /* This container will take up the space */
+    flex-grow: 1; /* This container will take up the available space */
+    /* This is crucial to allow the container to shrink and the text to wrap */
+    min-width: 0;
 }
 
 .recipe-select-toggle {
@@ -512,15 +546,52 @@ body {
     flex-shrink: 0; /* Prevent checkbox from shrinking */
 }
 
+/* Remove default browser styling from number inputs and style them for our custom component */
 .recipe-count-input {
-    width: 60px; /* A fixed width for the number input */
-    padding: 8px;
-    border: 1px solid #3A3A3A;
-    border-radius: 4px;
-    background-color: #252525;
+    -webkit-appearance: none; /* For Chrome, Safari, Opera */
+    -moz-appearance: textfield; /* For Firefox */
+    margin: 0; /* Reset margin */
+    border: none;
+    background-color: transparent;
+    width: 50px;
     color: #E0E0E0;
     text-align: center;
     font-size: 1em;
+}
+
+/* Container for the custom number input with buttons */
+.custom-number-input {
+    display: flex;
+    align-items: center;
+    border: 1px solid #3A3A3A;
+    border-radius: 4px;
+    background-color: #252525;
+    overflow: hidden; /* Ensures child border-radius works correctly */
+    flex-shrink: 0; /* Prevent this component from shrinking */
+}
+
+.quantity-btn {
+    background-color: #37474F;
+    color: #ECEFF1;
+    border: none;
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 1em;
+    font-weight: bold;
+    line-height: 1.5; /* Helps with vertical alignment */
+    transition: background-color 0.2s;
+}
+
+.quantity-btn:hover {
+    background-color: #455A64;
+}
+
+.quantity-down {
+    border-right: 1px solid #3A3A3A;
+}
+
+.quantity-up {
+    border-left: 1px solid #3A3A3A;
 }
 
 /* Styles for the weekly meal planner grid */
@@ -717,6 +788,8 @@ body {
     text-decoration: none;
     border-radius: 4px;
     transition: background-color 0.2s ease-in-out;
+    font-size: 16px;
+    font-weight: bold;
 }
 
 .clear-button:hover {
@@ -731,6 +804,8 @@ body {
     text-decoration: none;
     border-radius: 4px;
     transition: background-color 0.2s ease-in-out;
+    font-size: 16px;
+    font-weight: bold;
 }
 
 .print-button:hover {
@@ -739,4 +814,150 @@ body {
 
 .meal-plan-actions .submit-button {
     margin-top: 0;
+}
+
+/* Search bar for meal plan recipe selection */
+.meal-plan-search-container {
+    margin-bottom: 20px;
+}
+
+#recipe-search-input {
+    width: 100%;
+    padding: 12px;
+    box-sizing: border-box;
+    border: 1px solid #3A3A3A;
+    border-radius: 4px;
+    background-color: #252525;
+    color: #E0E0E0;
+    font-size: 1em;
+}
+
+/* Styles for Saved Meal Plans section */
+.save-plan-form {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.save-plan-form input[type="text"] {
+    flex-grow: 1;
+    margin-bottom: 0;
+}
+
+.save-plan-form .submit-button {
+    margin-top: 0;
+    flex-shrink: 0;
+}
+
+.saved-plans-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.saved-plan-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px;
+    background-color: #2C2C2C;
+    border: 1px solid #3A3A3A;
+    border-radius: 5px;
+}
+
+.saved-plan-item .plan-name {
+    font-weight: bold;
+}
+
+.saved-plan-item .plan-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.saved-plan-item .load-button {
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: #2196F3;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    transition: background-color 0.2s ease-in-out;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.saved-plan-item .load-button:hover {
+    background-color: #1976D2;
+}
+
+/* Styles for list controls like sorting */
+.list-controls {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    margin-bottom: 15px;
+    padding: 10px;
+    background-color: #2C2C2C;
+    border: 1px solid #3A3A3A;
+    border-radius: 5px;
+}
+
+.list-controls span {
+    font-weight: bold;
+    color: #B0BEC5;
+}
+
+.sort-link {
+    text-decoration: none;
+    color: #2196F3;
+    padding: 5px 10px;
+    border-radius: 4px;
+    transition: background-color 0.2s, color 0.2s;
+}
+
+.sort-link:hover {
+    background-color: #37474F;
+    color: #ECEFF1;
+}
+
+.sort-link.active {
+    background-color: #009688;
+    color: #FFFFFF;
+    font-weight: bold;
+}
+
+/* Styles for JSON input textarea on import page */
+.json-input {
+    width: 100%;
+    padding: 10px;
+    box-sizing: border-box;
+    border: 1px solid #3A3A3A;
+    border-radius: 4px;
+    background-color: #252525;
+    color: #E0E0E0;
+    font-family: monospace;
+    font-size: 0.9em;
+    resize: vertical;
+}
+
+/* Styles for example code block on import page */
+.example-container {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid #3A3A3A;
+}
+
+.example-container h4 {
+    margin-top: 0;
+    color: #B0BEC5;
+}
+
+.code-block {
+    background-color: #252525;
+    border: 1px solid #3A3A3A;
+    border-radius: 4px;
+    padding: 15px;
+    white-space: pre-wrap; /* Allows text to wrap */
+    word-wrap: break-word; /* Breaks long words */
 }

@@ -61,6 +61,12 @@ type RecipeInfo struct {
 	Title string
 }
 
+// MealPlanInfo holds basic info about a saved meal plan.
+type MealPlanInfo struct {
+	ID   int
+	Name string
+}
+
 // InitDB initializes the database connection using environment variables.
 func InitDB() error {
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
@@ -92,6 +98,78 @@ func DeleteRecipeByID(id int) error {
 	// The ON DELETE CASCADE on the foreign key constraints will handle deleting associated items.
 	_, err := conn.Exec("DELETE FROM recipes WHERE id = $1", id)
 	return err
+}
+
+// DuplicateRecipeByID creates a copy of an existing recipe and all its components.
+func DuplicateRecipeByID(id int) (int, error) {
+	tx, err := conn.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 1. Fetch the original recipe details
+	originalRecipe, err := FetchRecipeByID(id)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch original recipe for duplication: %w", err)
+	}
+
+	// 2. Create the new recipe with a modified title
+	newTitle := originalRecipe.Title + " (Copy)"
+	var newRecipeID int
+	err = tx.QueryRow("INSERT INTO recipes (title) VALUES ($1) RETURNING id", newTitle).Scan(&newRecipeID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create new recipe during duplication: %w", err)
+	}
+
+	// 3. Insert ingredients for the new recipe
+	if len(originalRecipe.Ingredients) > 0 {
+		stmtIng, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, measurement) VALUES($1, $2, $3, $4)")
+		if err != nil {
+			return 0, fmt.Errorf("failed to prepare ingredient statement for duplication: %w", err)
+		}
+		defer stmtIng.Close()
+		for _, ing := range originalRecipe.Ingredients {
+			if _, err := stmtIng.Exec(newRecipeID, ing.Name, ing.Amount, ing.Measurement); err != nil {
+				return 0, fmt.Errorf("failed to insert duplicated ingredient %s: %w", ing.Name, err)
+			}
+		}
+	}
+
+	// 4. Insert method steps for the new recipe
+	if len(originalRecipe.Method) > 0 {
+		stmtSteps, err := tx.Prepare("INSERT INTO method_steps(recipe_id, step_number, description) VALUES($1, $2, $3)")
+		if err != nil {
+			return 0, fmt.Errorf("failed to prepare method step statement for duplication: %w", err)
+		}
+		defer stmtSteps.Close()
+		for _, step := range originalRecipe.Method {
+			if _, err := stmtSteps.Exec(newRecipeID, step.StepNumber, step.Description); err != nil {
+				return 0, fmt.Errorf("failed to insert duplicated method step %d: %w", step.StepNumber, err)
+			}
+		}
+	}
+
+	// 5. Link categories to the new recipe
+	if len(originalRecipe.Categories) > 0 {
+		stmtLink, err := tx.Prepare("INSERT INTO recipe_categories (recipe_id, category_id) VALUES ($1, $2)")
+		if err != nil {
+			return 0, fmt.Errorf("failed to prepare link statement for duplication: %w", err)
+		}
+		defer stmtLink.Close()
+		for _, cat := range originalRecipe.Categories {
+			if _, err := stmtLink.Exec(newRecipeID, cat.ID); err != nil {
+				return 0, fmt.Errorf("failed to link category '%s' to duplicated recipe: %w", cat.Name, err)
+			}
+		}
+	}
+
+	// 6. Commit the transaction
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit duplication transaction: %w", err)
+	}
+
+	return newRecipeID, nil
 }
 
 // UpdateRecipe updates an existing recipe, its ingredients, and method steps in a transaction.
@@ -348,6 +426,86 @@ func FetchRecipes(searchQuery string, limit int, offset int) ([]Recipe, int, err
 	}
 
 	return recipes, totalRecipes, nil
+}
+
+// CountSavedMealPlans returns the total number of saved meal plans.
+func CountSavedMealPlans() (int, error) {
+	var count int
+	err := conn.QueryRow("SELECT COUNT(*) FROM meal_plans").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count saved meal plans: %w", err)
+	}
+	return count, nil
+}
+
+// ListSavedMealPlans retrieves a paginated list of saved meal plans from the database.
+func ListSavedMealPlans(sortOrder string, limit, offset int) ([]MealPlanInfo, error) {
+	orderByClause := "ORDER BY name ASC" // Default sort
+	switch sortOrder {
+	case "name_asc":
+		orderByClause = "ORDER BY name ASC"
+	case "date_desc":
+		orderByClause = "ORDER BY created_at DESC"
+	case "date_asc":
+		orderByClause = "ORDER BY created_at ASC"
+	// The default case is already handled, but this switch makes the logic clear
+	// and prevents any other values from being used in the query.
+	}
+
+	query := "SELECT id, name FROM meal_plans " + orderByClause + " LIMIT $1 OFFSET $2"
+	rows, err := conn.Query(query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch saved meal plans: %w", err)
+	}
+	defer rows.Close()
+
+	var plans []MealPlanInfo
+	for rows.Next() {
+		var p MealPlanInfo
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan saved meal plan: %w", err)
+		}
+		plans = append(plans, p)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating saved meal plans: %w", err)
+	}
+
+	return plans, nil
+}
+
+// SaveNamedMealPlan saves or updates a meal plan's JSON data with a given name.
+func SaveNamedMealPlan(name string, data string) error {
+	// Using ON CONFLICT to allow users to update a plan by saving with the same name.
+	query := `
+		INSERT INTO meal_plans (name, data) VALUES ($1, $2)
+		ON CONFLICT (name) DO UPDATE SET data = EXCLUDED.data`
+	_, err := conn.Exec(query, name, data)
+	if err != nil {
+		return fmt.Errorf("failed to save named meal plan '%s': %w", name, err)
+	}
+	return nil
+}
+
+// LoadNamedMealPlan retrieves the JSON data of a saved meal plan by its ID.
+func LoadNamedMealPlan(id int) (string, error) {
+	var data string
+	query := "SELECT data FROM meal_plans WHERE id = $1"
+	err := conn.QueryRow(query, id).Scan(&data)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("no meal plan found with id %d", id)
+		}
+		return "", fmt.Errorf("failed to load meal plan data: %w", err)
+	}
+	return data, nil
+}
+
+// DeleteNamedMealPlan deletes a saved meal plan by its ID.
+func DeleteNamedMealPlan(id int) error {
+	_, err := conn.Exec("DELETE FROM meal_plans WHERE id = $1", id)
+	return err
 }
 
 // SaveRecipe saves a new recipe and its components to the database in a single transaction.
