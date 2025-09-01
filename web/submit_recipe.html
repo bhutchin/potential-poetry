@@ -30,6 +30,11 @@
             </div>
 
             <div class="form-group">
+                <label for="sourceURL">Source URL</label>
+                <input type="url" id="sourceURL" name="sourceURL" placeholder="https://example.com/your-awesome-recipe" value="{{.Recipe.SourceURL.String}}">
+            </div>
+
+            <div class="form-group">
                 <label for="recipeTags">Tags (comma-separated)</label>
                 <input type="text" id="recipeTags" name="tags" placeholder="e.g., dessert, baking, vegan" value="{{.Recipe.TagsToString}}">
             </div>
@@ -39,7 +44,7 @@
                     <tr>
                         <th class="ingredient-col">Ingredient</th>
                         <th class="amount-col">Amount</th>
-                        <th class="measurement-col">Measurement</th>
+                        <th class="unit-col">Unit</th>
                         <th></th> <!-- New column for remove button -->
                     </tr>
                 </thead>
@@ -49,7 +54,7 @@
                         <tr class="ingredient-row">
                             <td><input type="text" name="ingredients[{{$index}}][name]" value="{{$ing.Name}}" required></td>
                             <td><input type="number" step="any" name="ingredients[{{$index}}][amount]" value="{{$ing.Amount}}" required></td>
-                            <td><input type="text" name="ingredients[{{$index}}][measurement]" value="{{$ing.Measurement}}"></td>
+                            <td><input type="text" name="ingredients[{{$index}}][unit]" value="{{$ing.Unit}}"></td>
                             <td><button type="button" class="remove-button" onclick="removeIngredientRow(this)">Remove</button></td>
                         </tr>
                         {{end}}
@@ -58,7 +63,7 @@
                     <tr class="ingredient-row">
                         <td><input type="text" name="ingredients[0][name]" placeholder="e.g., Flour" required></td>
                         <td><input type="number" step="any" name="ingredients[0][amount]" placeholder="e.g., 2" required></td>
-                        <td><input type="text" name="ingredients[0][measurement]" placeholder="e.g., cups"></td>
+                        <td><input type="text" name="ingredients[0][unit]" placeholder="e.g., cup"></td>
                         <td><button type="button" class="remove-button" onclick="removeIngredientRow(this)">Remove</button></td>
                     </tr>
                     {{end}}
@@ -118,7 +123,7 @@
             newRow.innerHTML = `
                 <td><input type="text" name="ingredients[${ingredientCount}][name]" placeholder="e.g., Sugar" required></td>
                 <td><input type="number" step="any" name="ingredients[${ingredientCount}][amount]" placeholder="e.g., 1" required></td>
-                <td><input type="text" name="ingredients[${ingredientCount}][measurement]" placeholder="e.g., cup"></td>
+                <td><input type="text" name="ingredients[${ingredientCount}][unit]" placeholder="e.g., cup"></td>
                 <td><button type="button" class="remove-button" onclick="removeIngredientRow(this)">Remove</button></td>
             `;
             

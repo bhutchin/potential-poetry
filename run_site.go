@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"net/url"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"potential-poetry/db"
 	"regexp"
@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
 	"github.com/gorilla/mux"
 )
 
@@ -52,6 +53,12 @@ type MealPlanPageData struct {
 	ShoppingList []db.Ingredient
 	MealOrder    []string
 	SavedPlans   []db.MealPlanInfo
+}
+
+// ImportPageData holds data for the recipe import page.
+type ImportPageData struct {
+	Error    string
+	JSONData string // To re-populate the textarea on error
 }
 
 const mealPlanCookieName = "meal-plan-recipes"
@@ -171,13 +178,13 @@ func (j *JSONLDInstruction) UnmarshalJSON(data []byte) error {
 
 // JSONLDIngredient represents an ingredient in JSON-LD, which can be a string or an object.
 type JSONLDIngredient struct {
-	Name        string
-	Amount      string
-	Measurement string
+	Name   string
+	Amount string
+	Unit   string
 }
 
-// UnmarshalJSON allows JSONLDIngredient to be parsed from a simple string
-// or a structured object.
+// UnmarshalJSON allows JSONLDIngredient to be parsed from a simple string,
+// or a structured object with a numeric or string quantity.
 func (j *JSONLDIngredient) UnmarshalJSON(data []byte) error {
 	// Try to unmarshal as a string first. This maintains backward compatibility
 	// with the standard schema.org format.
@@ -186,24 +193,37 @@ func (j *JSONLDIngredient) UnmarshalJSON(data []byte) error {
 		parsed := parseIngredientString(s)
 		j.Name = parsed.Name
 		j.Amount = parsed.Amount
-		j.Measurement = parsed.Measurement
+		j.Unit = parsed.Unit
 		return nil
 	}
 
 	// If it's not a string, unmarshal as our custom structured object.
 	// We use a temporary struct to avoid recursive calls to UnmarshalJSON.
 	var a struct {
-		Name        string `json:"name"`
-		Quantity    string `json:"quantity"`
-		Measurement string `json:"measurement"`
+		Name     string      `json:"name"`
+		Quantity interface{} `json:"quantity"`
+		Unit     string      `json:"unit"`
 	}
 	if err := json.Unmarshal(data, &a); err != nil {
 		return fmt.Errorf("ingredient must be a string or a structured object: %w", err)
 	}
 
 	j.Name = a.Name
-	j.Amount = a.Quantity // Map from "quantity" to our internal "Amount"
-	j.Measurement = a.Measurement
+	j.Unit = a.Unit
+
+	// Handle flexible quantity type (string or number).
+	switch v := a.Quantity.(type) {
+	case string:
+		j.Amount = v
+	case float64:
+		j.Amount = strconv.FormatFloat(v, 'f', -1, 64)
+	case nil:
+		j.Amount = ""
+	default:
+		// As a fallback, convert any other type to its string representation.
+		j.Amount = fmt.Sprintf("%v", v)
+	}
+
 	return nil
 }
 
@@ -211,6 +231,7 @@ func (j *JSONLDIngredient) UnmarshalJSON(data []byte) error {
 type JSONLDRecipe struct {
 	Type               interface{}         `json:"@type"`
 	Name               string              `json:"name"`
+	URL                string              `json:"url"`
 	RecipeIngredient   []JSONLDIngredient  `json:"recipeIngredient"`
 	RecipeInstructions []JSONLDInstruction `json:"recipeInstructions"`
 	Keywords           string              `json:"keywords"`
@@ -412,6 +433,7 @@ func updateRecipeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	title := r.PostFormValue("recipeTitle")
+	sourceURL := r.PostFormValue("sourceURL")
 	if title == "" {
 		http.Error(w, "Recipe title is required", http.StatusBadRequest)
 		return
@@ -440,7 +462,7 @@ func updateRecipeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := db.UpdateRecipe(id, title, ingredients, method, tags); err != nil {
+	if err := db.UpdateRecipe(id, title, sourceURL, ingredients, method, tags); err != nil {
 		log.Printf("Error updating recipe %d: %v", id, err)
 		http.Error(w, "Failed to update recipe", http.StatusInternalServerError)
 		return
@@ -913,13 +935,16 @@ func clearMealPlanCookie(w http.ResponseWriter, cookieName string) {
 }
 
 func importRecipePageHandler(w http.ResponseWriter, r *http.Request) {
-	renderTemplate(w, "web/import_recipe.html", nil)
+	renderTemplate(w, "web/import_recipe.html", ImportPageData{})
 }
 
 func handleImportHandler(w http.ResponseWriter, r *http.Request) {
 	jsonStr := r.PostFormValue("recipeJson")
 	if jsonStr == "" {
-		http.Error(w, "JSON data is required", http.StatusBadRequest)
+		renderTemplate(w, "web/import_recipe.html", ImportPageData{
+			Error:    "JSON data is required.",
+			JSONData: jsonStr,
+		})
 		return
 	}
 
@@ -943,14 +968,20 @@ func handleImportHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			// If both fail, it's invalid JSON
 			log.Printf("Error unmarshalling imported JSON: %v", err)
-			http.Error(w, "Invalid JSON format. Please ensure you are pasting valid JSON-LD.", http.StatusBadRequest)
+			renderTemplate(w, "web/import_recipe.html", ImportPageData{
+				Error:    "Invalid JSON format. Please ensure you are pasting valid JSON-LD.",
+				JSONData: jsonStr,
+			})
 			return
 		}
 	}
 
 	if recipe == nil {
 		log.Printf("No recipe object found in the provided JSON")
-		http.Error(w, "Could not find a valid recipe object in the provided JSON.", http.StatusUnprocessableEntity)
+		renderTemplate(w, "web/import_recipe.html", ImportPageData{
+			Error:    "Could not find a valid recipe object in the provided JSON.",
+			JSONData: jsonStr,
+		})
 		return
 	}
 
@@ -961,10 +992,13 @@ func handleImportHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save the parsed recipe to the database.
-	newRecipeID, err := db.SaveRecipe(recipe.Title, recipe.Ingredients, recipe.Method, tags)
+	newRecipeID, err := db.SaveRecipe(recipe.Title, recipe.SourceURL.String, recipe.Ingredients, recipe.Method, tags)
 	if err != nil {
 		log.Printf("Error saving imported recipe to database: %v", err)
-		http.Error(w, "Failed to save imported recipe", http.StatusInternalServerError)
+		renderTemplate(w, "web/import_recipe.html", ImportPageData{
+			Error:    "Failed to save imported recipe.",
+			JSONData: jsonStr,
+		})
 		return
 	}
 
@@ -991,14 +1025,15 @@ func isRecipeType(t interface{}) bool {
 // convertJSONLDToRecipe transforms a scraped JSON-LD recipe into our internal Recipe struct.
 func convertJSONLDToRecipe(ld JSONLDRecipe) *db.Recipe {
 	recipe := &db.Recipe{
-		Title: ld.Name,
+		Title:     ld.Name,
+		SourceURL: sql.NullString{String: ld.URL, Valid: ld.URL != ""},
 	}
 
 	for _, ing := range ld.RecipeIngredient {
 		recipe.Ingredients = append(recipe.Ingredients, db.Ingredient{
-			Name:        ing.Name,
-			Amount:      ing.Amount,
-			Measurement: ing.Measurement,
+			Name:   ing.Name,
+			Amount: ing.Amount,
+			Unit:   ing.Unit,
 		})
 	}
 
@@ -1072,14 +1107,14 @@ func parseIngredientString(ingStr string) db.Ingredient {
 	for _, unit := range allUnits {
 		// Check for "cup " or an exact match "cup"
 		if strings.HasPrefix(strings.ToLower(remainingStr), unit+" ") || strings.ToLower(remainingStr) == unit {
-			measurement := unit
+			unitName := unit
 			name := strings.TrimSpace(remainingStr[len(unit):])
 			// Clean up common leading characters like "of"
 			name = strings.TrimPrefix(name, "of ")
 			return db.Ingredient{
-				Amount:      amountStr,
-				Measurement: measurement,
-				Name:        name,
+				Amount: amountStr,
+				Unit:   unitName,
+				Name:   name,
 			}
 		}
 	}
@@ -1087,9 +1122,9 @@ func parseIngredientString(ingStr string) db.Ingredient {
 	// No known unit found. The rest of the string is the name.
 	// e.g., "2 large eggs" -> Amount: "2", Name: "large eggs"
 	return db.Ingredient{
-		Amount:      amountStr,
-		Measurement: "",
-		Name:        remainingStr,
+		Amount: amountStr,
+		Unit:   "",
+		Name:   remainingStr,
 	}
 }
 
@@ -1131,7 +1166,7 @@ func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 	// map[IngredientName]TotalInBaseUnit (grams)
 	consolidatedWeightConvertible := make(map[string]float64)
 	// For units we can't convert, but amounts are numeric (e.g. "2 cloves")
-	// map[IngredientName]map[Measurement]Amount
+	// map[IngredientName]map[Unit]Amount
 	consolidatedOther := make(map[string]map[string]float64)
 	// For ingredients where amount is not a number (e.g. "a pinch")
 	var nonNumericShoppingList []db.Ingredient
@@ -1148,7 +1183,7 @@ func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 
 		for _, ing := range recipe.Ingredients {
 			name := strings.ToLower(strings.TrimSpace(ing.Name))
-			measurement := strings.ToLower(strings.TrimSpace(ing.Measurement))
+			unit := strings.ToLower(strings.TrimSpace(ing.Unit))
 
 			amount, err := strconv.ParseFloat(ing.Amount, 64)
 			if err != nil {
@@ -1160,8 +1195,8 @@ func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 				continue
 			}
 
-			volumeConversionFactor, isVolumeConvertible := unitConversions[measurement]
-			weightConversionFactor, isWeightConvertible := weightConversions[measurement]
+			volumeConversionFactor, isVolumeConvertible := unitConversions[unit]
+			weightConversionFactor, isWeightConvertible := weightConversions[unit]
 
 			if isVolumeConvertible {
 				// Unit is convertible, add to the base unit total.
@@ -1173,11 +1208,11 @@ func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 				consolidatedWeightConvertible[name] += totalAmountInBaseUnit
 			} else {
 				// Unit is not convertible (e.g., "cloves", "slices"), but amount is numeric.
-				// Consolidate by name and exact measurement string.
+				// Consolidate by name and exact unit string.
 				if _, ok := consolidatedOther[name]; !ok {
 					consolidatedOther[name] = make(map[string]float64)
 				}
-				consolidatedOther[name][ing.Measurement] += amount * float64(countMultiplier)
+				consolidatedOther[name][ing.Unit] += amount * float64(countMultiplier)
 			}
 		}
 	}
@@ -1186,31 +1221,31 @@ func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 
 	// Process convertible volume ingredients, formatting them to the best unit.
 	for name, totalTeaspoons := range consolidatedConvertible {
-		amountStr, measurementStr := formatAmount(totalTeaspoons)
+		amountStr, unitStr := formatAmount(totalTeaspoons)
 		shoppingList = append(shoppingList, db.Ingredient{
-			Name:        strings.Title(name),
-			Amount:      amountStr,
-			Measurement: measurementStr,
+			Name:   strings.Title(name),
+			Amount: amountStr,
+			Unit:   unitStr,
 		})
 	}
 
 	// Process convertible weight ingredients, formatting them to the best unit.
 	for name, totalGrams := range consolidatedWeightConvertible {
-		amountStr, measurementStr := formatWeightAmount(totalGrams)
+		amountStr, unitStr := formatWeightAmount(totalGrams)
 		shoppingList = append(shoppingList, db.Ingredient{
-			Name:        strings.Title(name),
-			Amount:      amountStr,
-			Measurement: measurementStr,
+			Name:   strings.Title(name),
+			Amount: amountStr,
+			Unit:   unitStr,
 		})
 	}
 
 	// Process other numeric ingredients that weren't convertible.
-	for name, measurementMap := range consolidatedOther {
-		for measurement, amount := range measurementMap {
+	for name, unitMap := range consolidatedOther {
+		for unit, amount := range unitMap {
 			shoppingList = append(shoppingList, db.Ingredient{
-				Name:        strings.Title(name), // Capitalize for display
-				Measurement: measurement,
-				Amount:      strconv.FormatFloat(amount, 'f', -1, 64), // -1 for fewest digits
+				Name:   strings.Title(name), // Capitalize for display
+				Unit:   unit,
+				Amount: strconv.FormatFloat(amount, 'f', -1, 64), // -1 for fewest digits
 			})
 		}
 	}
@@ -1223,7 +1258,7 @@ func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 		if shoppingList[i].Name != shoppingList[j].Name {
 			return shoppingList[i].Name < shoppingList[j].Name
 		}
-		return shoppingList[i].Measurement < shoppingList[j].Measurement
+		return shoppingList[i].Unit < shoppingList[j].Unit
 	})
 
 	return shoppingList, nil
@@ -1341,7 +1376,7 @@ func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save the parsed ingredients to the database.
-	recipeID, err := db.SaveRecipe(title, ingredients, method, tags)
+	recipeID, err := db.SaveRecipe(title, "", ingredients, method, tags)
 	if err != nil {
 		log.Printf("Error saving recipe to database: %v", err)
 		http.Error(w, "Failed to save recipe", http.StatusInternalServerError)
@@ -1356,8 +1391,8 @@ func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
 
 // parseIngredientsForm extracts ingredient data from the HTTP request form.
 func parseIngredientsForm(r *http.Request) ([]db.Ingredient, error) {
-	// Regex to capture the index and field (name, amount, measurement) from form keys.
-	re := regexp.MustCompile(`^ingredients\[(\d+)\]\[(name|amount|measurement)\]$`)
+	// Regex to capture the index and field (name, amount, unit) from form keys.
+	re := regexp.MustCompile(`^ingredients\[(\d+)\]\[(name|amount|unit)\]$`)
 	ingredientsMap := make(map[int]db.Ingredient)
 
 	for key, values := range r.PostForm {
@@ -1382,8 +1417,8 @@ func parseIngredientsForm(r *http.Request) ([]db.Ingredient, error) {
 		case "amount":
 			// Allow non-numeric amounts like "a pinch"
 			ingredient.Amount = value
-		case "measurement":
-			ingredient.Measurement = value
+		case "unit":
+			ingredient.Unit = value
 		}
 		ingredientsMap[index] = ingredient
 	}

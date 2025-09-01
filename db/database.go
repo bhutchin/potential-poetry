@@ -3,9 +3,9 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
@@ -16,9 +16,9 @@ var conn *sql.DB
 
 // Ingredient represents the structure of a single ingredient.
 type Ingredient struct {
-	Name        string
-	Amount      string
-	Measurement string
+	Name   string
+	Amount string
+	Unit   string
 }
 
 // MethodStep represents a single step in a recipe's method.
@@ -31,6 +31,7 @@ type MethodStep struct {
 type Recipe struct {
 	ID          int
 	Title       string
+	SourceURL   sql.NullString // For the original URL of an imported recipe
 	CreatedAt   time.Time
 	Ingredients []Ingredient
 	Method      []MethodStep
@@ -117,20 +118,20 @@ func DuplicateRecipeByID(id int) (int, error) {
 	// 2. Create the new recipe with a modified title
 	newTitle := originalRecipe.Title + " (Copy)"
 	var newRecipeID int
-	err = tx.QueryRow("INSERT INTO recipes (title) VALUES ($1) RETURNING id", newTitle).Scan(&newRecipeID)
+	err = tx.QueryRow("INSERT INTO recipes (title, source_url) VALUES ($1, $2) RETURNING id", newTitle, originalRecipe.SourceURL).Scan(&newRecipeID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create new recipe during duplication: %w", err)
 	}
 
 	// 3. Insert ingredients for the new recipe
 	if len(originalRecipe.Ingredients) > 0 {
-		stmtIng, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, measurement) VALUES($1, $2, $3, $4)")
+		stmtIng, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, unit) VALUES($1, $2, $3, $4)")
 		if err != nil {
 			return 0, fmt.Errorf("failed to prepare ingredient statement for duplication: %w", err)
 		}
 		defer stmtIng.Close()
 		for _, ing := range originalRecipe.Ingredients {
-			if _, err := stmtIng.Exec(newRecipeID, ing.Name, ing.Amount, ing.Measurement); err != nil {
+			if _, err := stmtIng.Exec(newRecipeID, ing.Name, ing.Amount, ing.Unit); err != nil {
 				return 0, fmt.Errorf("failed to insert duplicated ingredient %s: %w", ing.Name, err)
 			}
 		}
@@ -173,15 +174,20 @@ func DuplicateRecipeByID(id int) (int, error) {
 }
 
 // UpdateRecipe updates an existing recipe, its ingredients, and method steps in a transaction.
-func UpdateRecipe(id int, title string, ingredients []Ingredient, method []MethodStep, tags []string) error {
+func UpdateRecipe(id int, title string, sourceURL string, ingredients []Ingredient, method []MethodStep, tags []string) error {
 	tx, err := conn.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// 1. Update the recipe title
-	_, err = tx.Exec("UPDATE recipes SET title = $1 WHERE id = $2", title, id)
+	// 1. Update the recipe title and source URL
+	var sourceURLValue sql.NullString
+	if sourceURL != "" {
+		sourceURLValue.String = sourceURL
+		sourceURLValue.Valid = true
+	}
+	_, err = tx.Exec("UPDATE recipes SET title = $1, source_url = $2 WHERE id = $3", title, sourceURLValue, id)
 	if err != nil {
 		return fmt.Errorf("failed to update recipe title: %w", err)
 	}
@@ -226,14 +232,14 @@ func UpdateRecipe(id int, title string, ingredients []Ingredient, method []Metho
 	}
 
 	// 3. Insert new ingredients
-	stmtIng, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, measurement) VALUES($1, $2, $3, $4)")
+	stmtIng, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, unit) VALUES($1, $2, $3, $4)")
 	if err != nil {
 		return fmt.Errorf("failed to prepare ingredient statement: %w", err)
 	}
 	defer stmtIng.Close()
 
 	for _, ing := range ingredients {
-		if _, err := stmtIng.Exec(id, ing.Name, ing.Amount, ing.Measurement); err != nil {
+		if _, err := stmtIng.Exec(id, ing.Name, ing.Amount, ing.Unit); err != nil {
 			return fmt.Errorf("failed to insert ingredient %s: %w", ing.Name, err)
 		}
 	}
@@ -281,21 +287,21 @@ func FetchAllRecipeInfos() ([]RecipeInfo, error) {
 // FetchRecipeByID retrieves a single recipe and its details from the database.
 func FetchRecipeByID(id int) (*Recipe, error) {
 	recipe := &Recipe{}
-	queryRecipe := "SELECT id, title, created_at FROM recipes WHERE id = $1"
-	err := conn.QueryRow(queryRecipe, id).Scan(&recipe.ID, &recipe.Title, &recipe.CreatedAt)
+	queryRecipe := "SELECT id, title, source_url, created_at FROM recipes WHERE id = $1"
+	err := conn.QueryRow(queryRecipe, id).Scan(&recipe.ID, &recipe.Title, &recipe.SourceURL, &recipe.CreatedAt)
 	if err != nil {
 		return nil, err // Returns sql.ErrNoRows if not found
 	}
 
 	// Fetch ingredients
-	rowsIng, err := conn.Query("SELECT name, amount, measurement FROM ingredients WHERE recipe_id = $1 ORDER BY id", id)
+	rowsIng, err := conn.Query("SELECT name, amount, unit FROM ingredients WHERE recipe_id = $1 ORDER BY id", id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch ingredients: %w", err)
 	}
 	defer rowsIng.Close()
 	for rowsIng.Next() {
 		var ing Ingredient
-		if err := rowsIng.Scan(&ing.Name, &ing.Amount, &ing.Measurement); err != nil {
+		if err := rowsIng.Scan(&ing.Name, &ing.Amount, &ing.Unit); err != nil {
 			return nil, fmt.Errorf("failed to scan ingredient: %w", err)
 		}
 		recipe.Ingredients = append(recipe.Ingredients, ing)
@@ -373,7 +379,7 @@ func FetchRecipes(searchQuery string, limit int, offset int) ([]Recipe, int, err
 
 	query += `
 		)
-		SELECT r.id, r.title, r.created_at,
+		SELECT r.id, r.title, r.created_at, r.source_url,
 		       c.id, c.name
 		FROM recipes r
 		LEFT JOIN recipe_categories rc ON r.id = rc.recipe_id
@@ -393,15 +399,16 @@ func FetchRecipes(searchQuery string, limit int, offset int) ([]Recipe, int, err
 		var recipeID int
 		var recipeTitle string
 		var recipeCreatedAt time.Time
+		var sourceURL sql.NullString
 		var catName sql.NullString
 		var catID sql.NullInt64
 
-		if err := rows.Scan(&recipeID, &recipeTitle, &recipeCreatedAt, &catID, &catName); err != nil {
+		if err := rows.Scan(&recipeID, &recipeTitle, &recipeCreatedAt, &sourceURL, &catID, &catName); err != nil {
 			return nil, 0, err
 		}
 
 		if _, ok := recipeMap[recipeID]; !ok {
-			recipe := &Recipe{ID: recipeID, Title: recipeTitle, CreatedAt: recipeCreatedAt}
+			recipe := &Recipe{ID: recipeID, Title: recipeTitle, CreatedAt: recipeCreatedAt, SourceURL: sourceURL}
 			recipeMap[recipeID] = recipe
 			orderedRecipes = append(orderedRecipes, recipe)
 		}
@@ -448,8 +455,8 @@ func ListSavedMealPlans(sortOrder string, limit, offset int) ([]MealPlanInfo, er
 		orderByClause = "ORDER BY created_at DESC"
 	case "date_asc":
 		orderByClause = "ORDER BY created_at ASC"
-	// The default case is already handled, but this switch makes the logic clear
-	// and prevents any other values from being used in the query.
+		// The default case is already handled, but this switch makes the logic clear
+		// and prevents any other values from being used in the query.
 	}
 
 	query := "SELECT id, name FROM meal_plans " + orderByClause + " LIMIT $1 OFFSET $2"
@@ -509,15 +516,21 @@ func DeleteNamedMealPlan(id int) error {
 }
 
 // SaveRecipe saves a new recipe and its components to the database in a single transaction.
-func SaveRecipe(title string, ingredients []Ingredient, method []MethodStep, tags []string) (int, error) {
+func SaveRecipe(title string, sourceURL string, ingredients []Ingredient, method []MethodStep, tags []string) (int, error) {
 	tx, err := conn.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
+	var sourceURLValue sql.NullString
+	if sourceURL != "" {
+		sourceURLValue.String = sourceURL
+		sourceURLValue.Valid = true
+	}
+
 	var recipeID int
-	err = tx.QueryRow("INSERT INTO recipes (title) VALUES ($1) RETURNING id", title).Scan(&recipeID)
+	err = tx.QueryRow("INSERT INTO recipes (title, source_url) VALUES ($1, $2) RETURNING id", title, sourceURLValue).Scan(&recipeID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create recipe: %w", err)
 	}
@@ -551,13 +564,13 @@ func SaveRecipe(title string, ingredients []Ingredient, method []MethodStep, tag
 	}
 
 	// Insert ingredients
-	stmtIng, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, measurement) VALUES($1, $2, $3, $4)")
+	stmtIng, err := tx.Prepare("INSERT INTO ingredients(recipe_id, name, amount, unit) VALUES($1, $2, $3, $4)")
 	if err != nil {
 		return 0, fmt.Errorf("failed to prepare ingredient statement: %w", err)
 	}
 	defer stmtIng.Close()
 	for _, ing := range ingredients {
-		if _, err := stmtIng.Exec(recipeID, ing.Name, ing.Amount, ing.Measurement); err != nil {
+		if _, err := stmtIng.Exec(recipeID, ing.Name, ing.Amount, ing.Unit); err != nil {
 			return 0, fmt.Errorf("failed to insert ingredient %s: %w", ing.Name, err)
 		}
 	}
@@ -603,7 +616,7 @@ func FetchRecipesByTag(tagName string, limit int, offset int) ([]Recipe, int, er
 			ORDER BY r.created_at DESC, r.id
 			LIMIT $2 OFFSET $3
 		)
-		SELECT r.id, r.title, r.created_at,
+		SELECT r.id, r.title, r.created_at, r.source_url,
 		       c.id, c.name
 		FROM recipes r
 		LEFT JOIN recipe_categories rc ON r.id = rc.recipe_id
@@ -623,15 +636,16 @@ func FetchRecipesByTag(tagName string, limit int, offset int) ([]Recipe, int, er
 		var recipeID int
 		var recipeTitle string
 		var recipeCreatedAt time.Time
+		var sourceURL sql.NullString
 		var catName sql.NullString
 		var catID sql.NullInt64
 
-		if err := rows.Scan(&recipeID, &recipeTitle, &recipeCreatedAt, &catID, &catName); err != nil {
+		if err := rows.Scan(&recipeID, &recipeTitle, &recipeCreatedAt, &sourceURL, &catID, &catName); err != nil {
 			return nil, 0, err
 		}
 
 		if _, ok := recipeMap[recipeID]; !ok {
-			recipe := &Recipe{ID: recipeID, Title: recipeTitle, CreatedAt: recipeCreatedAt}
+			recipe := &Recipe{ID: recipeID, Title: recipeTitle, CreatedAt: recipeCreatedAt, SourceURL: sourceURL}
 			recipeMap[recipeID] = recipe
 			orderedRecipes = append(orderedRecipes, recipe)
 		}

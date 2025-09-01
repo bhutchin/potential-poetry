@@ -19,13 +19,18 @@
             </div>
             {{end}}
             <h1>{{.Recipe.Title}}</h1>
+            {{if .Recipe.SourceURL.Valid}}
+            <p class="recipe-source">
+                Original source: <a href="{{.Recipe.SourceURL.String}}" target="_blank" rel="noopener noreferrer">{{.Recipe.SourceURL.String}}</a>
+            </p>
+            {{end}}
             <p class="recipe-date">Created on: {{.Recipe.CreatedAt.Format "January 2, 2006"}}</p>
 
             {{if .Recipe.Ingredients}}
                 <h3>Ingredients</h3>
                 <ul class="ingredient-list">
                     {{range .Recipe.Ingredients}}
-                    <li>{{.Amount}} {{if .Measurement}}{{.Measurement}} {{end}}{{.Name}}</li>
+                    <li>{{.Amount}} {{if .Unit}}{{.Unit}} {{end}}{{.Name}}</li>
                     {{end}}
                 </ul>
             {{else}}

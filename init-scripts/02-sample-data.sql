@@ -23,10 +23,10 @@ BEGIN
     INSERT INTO categories (name) VALUES ('quick') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id INTO category_id_quick;
 
     -- Recipe 1: Chocolate Chip Cookies
-    INSERT INTO recipes (title) VALUES ('Classic Chocolate Chip Cookies') RETURNING id INTO recipe_id_1;
+    INSERT INTO recipes (title, source_url) VALUES ('Classic Chocolate Chip Cookies', 'https://example.com/recipes/chocolate-chip-cookies') RETURNING id INTO recipe_id_1;
 
     -- Ingredients for Recipe 1
-    INSERT INTO ingredients (recipe_id, name, amount, measurement) VALUES
+    INSERT INTO ingredients (recipe_id, name, amount, unit) VALUES
         (recipe_id_1, 'all-purpose flour', '2.25', 'cups'),
         (recipe_id_1, 'baking soda', '1', 'teaspoon'),
         (recipe_id_1, 'salt', '0.5', 'teaspoon'),
@@ -55,7 +55,7 @@ BEGIN
     INSERT INTO recipes (title) VALUES ('Quick Tomato Pasta') RETURNING id INTO recipe_id_2;
 
     -- Ingredients for Recipe 2
-    INSERT INTO ingredients (recipe_id, name, amount, measurement) VALUES
+    INSERT INTO ingredients (recipe_id, name, amount, unit) VALUES
         (recipe_id_2, 'pasta (like spaghetti or penne)', '1', 'pound'), (recipe_id_2, 'olive oil', '2', 'tablespoons'), (recipe_id_2, 'garlic, minced', '3', 'cloves'), (recipe_id_2, 'canned crushed tomatoes', '28', 'ounces'), (recipe_id_2, 'dried oregano', '1', 'teaspoon'), (recipe_id_2, 'salt', '0.5', 'teaspoon'), (recipe_id_2, 'black pepper', '0.25', 'teaspoon'), (recipe_id_2, 'fresh basil, chopped', '0.25', 'cup');
 
     -- Method for Recipe 2

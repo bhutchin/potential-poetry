@@ -8,12 +8,18 @@
 <body>
     <div class="content-container">
         <h1>Import Recipe from JSON</h1>
-        <p>Paste the JSON-LD data for a recipe below. You can use structured ingredients (with name, quantity, measurement) or simple strings.</p>
+        <p>Paste the JSON-LD data for a recipe below. You can use structured ingredients (with name, quantity, unit) or simple strings.</p>
+
+        {{if .Error}}
+        <div class="alert alert-danger">
+            <strong>Error:</strong> {{.Error}}
+        </div>
+        {{end}}
 
         <form action="/handle-import" method="post" class="import-form">
             <div class="form-group">
                 <label for="recipeJson">Recipe JSON-LD</label>
-                <textarea id="recipeJson" name="recipeJson" class="json-input" rows="20" placeholder="Paste your recipe's JSON-LD here..." required></textarea>
+                <textarea id="recipeJson" name="recipeJson" class="json-input" rows="20" placeholder="Paste your recipe's JSON-LD here..." required>{{.JSONData}}</textarea>
             </div>
             <button type="submit" class="submit-button">Import Recipe</button>
         </form>
@@ -24,10 +30,11 @@
   "@context": "https://schema.org/",
   "@type": "Recipe",
   "name": "Sample Recipe Title",
+  "url": "https://www.example.com/your-recipe-link-here",
   "recipeIngredient": [
-    { "name": "all-purpose flour", "quantity": "1", "measurement": "cup" },
-    { "name": "large eggs", "quantity": "2", "measurement": "" },
-    { "name": "salt", "quantity": "0.5", "measurement": "tsp" }
+    { "name": "all-purpose flour", "quantity": "1", "unit": "cup" },
+    { "name": "large eggs", "quantity": "2", "unit": "" },
+    { "name": "salt", "quantity": "0.5", "unit": "tsp" }
   ],
   "recipeInstructions": [
     { "@type": "HowToStep", "text": "First step description." },
