@@ -101,9 +101,9 @@
         </form>
     </div>
 
-    <p style="text-align: center; margin-top: 20px;">
-        <a href="{{if .Recipe.ID}}/recipe/{{.Recipe.ID}}{{else}}/{{end}}" class="cancel-link">Cancel</a>
-    </p>
+    <div class="page-footer-nav">
+        <a href="{{if .Recipe.ID}}/recipe/{{.Recipe.ID}}{{else}}/{{end}}" class="nav-button home">Cancel</a>
+    </div>
 
     <script>
         // Initialize the counter based on the number of ingredients passed to the template.

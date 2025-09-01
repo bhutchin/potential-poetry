@@ -8,46 +8,63 @@
 <body>
     <div class="content-container">
         <h1>Meal Planner</h1>
-        <p>Select recipes to generate a consolidated shopping list.</p>
 
         <form action="/meal-plan" method="post" class="meal-plan-form">
 
-            <h3 class="section-title">Available Recipes</h3>
+            <h3 class="section-title">Select Meals</h3>
+            <p>Set the quantity for each recipe you want in your meal plan. Set to 0 to remove.</p>
             <div class="recipe-selection-list">
                 {{range .AllRecipes}}
-                    {{if not (index $.SelectedRecipes .ID)}}
-                        <div class="recipe-checkbox">
-                            <input type="checkbox" name="recipe_ids" value="{{.ID}}" id="recipe_{{.ID}}">
-                            <label for="recipe_{{.ID}}">{{.Title}}</label>
-                        </div>
-                    {{end}}
+                <div class="recipe-count-item">
+                    <div class="recipe-selector">
+                        <input type="checkbox" class="recipe-select-toggle" id="recipe_toggle_{{.ID}}" data-target-id="count_{{.ID}}" {{if gt (index $.RecipeCounts .ID) 0}}checked{{end}}>
+                        <label for="recipe_toggle_{{.ID}}">{{.Title}}</label>
+                    </div>
+                    <input type="number" name="count_{{.ID}}" value="{{index $.RecipeCounts .ID}}" min="0" id="count_{{.ID}}" class="recipe-count-input" {{if not (gt (index $.RecipeCounts .ID) 0)}}style="display: none;"{{end}}>
+                </div>
                 {{end}}
             </div>
 
-            <h3 class="section-title">Current Meal Plan</h3>
-            {{$hasSelected := false}}
-            <div class="recipe-selection-list">
-                {{range .AllRecipes}}
-                    {{if (index $.SelectedRecipes .ID)}}
-                        {{$hasSelected = true}}
-                        <div class="recipe-checkbox">
-                            <input type="checkbox" name="recipe_ids" value="{{.ID}}" id="recipe_{{.ID}}" checked>
-                            <label for="recipe_{{.ID}}">{{.Title}}</label>
-                        </div>
-                    {{end}}
-                {{end}}
-            </div>
-            {{if not $hasSelected}}
-                <p>No meals selected yet. Choose from the available recipes above.</p>
-            {{end}}
-
+            <input type="hidden" name="meal_order" id="meal_order_input">
             <div class="meal-plan-actions">
-                <button type="submit" class="submit-button">Update Shopping List</button>
+                <button type="button" id="update-plan-btn" class="submit-button">Update Shopping List</button>
                 <a href="/meal-plan?action=clear" class="clear-button">Clear Plan</a>
             </div>
         </form>
 
         {{if .ShoppingList}}
+        <h3 class="section-title">Weekly Meal Plan</h3>
+        <div class="meal-plan-week">
+            <div class="meal-plan-day">
+                <h4>Sunday</h4>
+                <div class="day-drop-zone"></div>
+            </div>
+            <div class="meal-plan-day">
+                <h4>Monday</h4>
+                <div class="day-drop-zone"></div>
+            </div>
+            <div class="meal-plan-day">
+                <h4>Tuesday</h4>
+                <div class="day-drop-zone"></div>
+            </div>
+            <div class="meal-plan-day">
+                <h4>Wednesday</h4>
+                <div class="day-drop-zone"></div>
+            </div>
+            <div class="meal-plan-day">
+                <h4>Thursday</h4>
+                <div class="day-drop-zone"></div>
+            </div>
+            <div class="meal-plan-day">
+                <h4>Friday</h4>
+                <div class="day-drop-zone"></div>
+            </div>
+            <div class="meal-plan-day">
+                <h4>Saturday</h4>
+                <div class="day-drop-zone"></div>
+            </div>
+        </div>
+
         <h3 class="section-title">Consolidated Shopping List</h3>
         <table class="shopping-list-table">
             <thead>
@@ -69,8 +86,150 @@
         </table>
         {{end}}
     </div>
-    <p style="text-align: center; margin-top: 20px;">
-        <a href="/recipes" class="cancel-link">Back to All Recipes</a>
-    </p>
+    <div class="page-footer-nav">
+        <a href="/recipes" class="nav-button home">Back to All Recipes</a>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const recipeData = new Map();
+            {{range .AllRecipes}}
+            recipeData.set('{{.ID}}', { title: `{{.Title | js}}` });
+            {{end}}
+
+            let draggedItem = null;
+
+            function createMealCard(recipeId, title, quantity) {
+                const card = document.createElement('div');
+                card.className = 'meal-card-planner';
+                card.draggable = true;
+                card.dataset.recipeId = recipeId;
+                card.innerHTML = `
+                    <div class="meal-card-info">
+                        <span class="drag-handle">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M7 2a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zM7 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zM7 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/></svg>
+                        </span>
+                        <span class="meal-card-title">${title}</span>
+                    </div>
+                    <span class="meal-card-quantity">x${quantity}</span>
+                `;
+                card.addEventListener('dragstart', handleDragStart);
+                card.addEventListener('dragend', handleDragEnd);
+                return card;
+            }
+
+            function addMealToPlan(recipeId, quantity) {
+                const firstEmptySlot = document.querySelector('.day-drop-zone:empty');
+                if (firstEmptySlot) {
+                    const recipe = recipeData.get(String(recipeId));
+                    if (recipe) {
+                        const card = createMealCard(recipeId, recipe.title, quantity);
+                        firstEmptySlot.appendChild(card);
+                    }
+                }
+            }
+
+            function removeMealFromPlan(recipeId) {
+                const card = document.querySelector(`.meal-card-planner[data-recipe-id="${recipeId}"]`);
+                if (card) {
+                    card.remove();
+                }
+            }
+
+            function renderInitialPlan(mealOrder) {
+                const daySlots = Array.from(document.querySelectorAll('.day-drop-zone'));
+                const recipeCounts = new Map();
+                {{range $id, $count := .RecipeCounts}}
+                recipeCounts.set('{{$id}}', '{{$count}}');
+                {{end}}
+
+                mealOrder.forEach((recipeId, index) => {
+                    if (recipeId && index < daySlots.length) {
+                        const recipe = recipeData.get(recipeId);
+                        const quantity = recipeCounts.get(recipeId);
+                        if (recipe && quantity) {
+                            const card = createMealCard(recipeId, recipe.title, quantity);
+                            daySlots[index].appendChild(card);
+                        }
+                    }
+                });
+            }
+
+            function handleDragStart(e) {
+                draggedItem = e.currentTarget;
+                setTimeout(() => {
+                    draggedItem.classList.add('dragging');
+                }, 0);
+            }
+
+            function handleDragEnd() {
+                if (draggedItem) {
+                    draggedItem.classList.remove('dragging');
+                }
+                draggedItem = null;
+            }
+
+            // --- Event Listeners ---
+            document.querySelectorAll('.recipe-select-toggle').forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    const quantityInput = document.getElementById(this.dataset.targetId);
+                    const recipeId = this.id.replace('recipe_toggle_', '');
+
+                    if (this.checked) {
+                        quantityInput.style.display = '';
+                        if (quantityInput.value === '0') {
+                            quantityInput.value = '1';
+                        }
+                        addMealToPlan(recipeId, quantityInput.value);
+                    } else {
+                        quantityInput.style.display = 'none';
+                        quantityInput.value = '0';
+                        removeMealFromPlan(recipeId);
+                    }
+                });
+            });
+
+            document.querySelectorAll('.day-drop-zone').forEach(zone => {
+                zone.addEventListener('dragover', e => {
+                    e.preventDefault();
+                    zone.classList.add('drag-over');
+                });
+                zone.addEventListener('dragleave', () => {
+                    zone.classList.remove('drag-over');
+                });
+                zone.addEventListener('drop', e => {
+                    e.preventDefault();
+                    zone.classList.remove('drag-over');
+                    if (draggedItem && draggedItem.parentElement !== zone) {
+                        if (zone.children.length > 0) {
+                            const existingItem = zone.firstElementChild;
+                            draggedItem.parentElement.appendChild(existingItem);
+                        }
+                        zone.appendChild(draggedItem);
+                    }
+                });
+            });
+
+            document.getElementById('update-plan-btn').addEventListener('click', () => {
+                const daySlots = document.querySelectorAll('.day-drop-zone');
+                const order = Array.from(daySlots).map(zone => {
+                    const card = zone.querySelector('.meal-card-planner');
+                    return card ? card.dataset.recipeId : '';
+                });
+                
+                document.getElementById('meal_order_input').value = order.join(',');
+                document.querySelector('.meal-plan-form').submit();
+            });
+
+            // --- Initial Page Load ---
+            const initialMealOrder = [
+                {{range .MealOrder}}
+                `{{.}}`,
+                {{end}}
+            ];
+            if (document.querySelector('.meal-plan-week')) {
+                renderInitialPlan(initialMealOrder);
+            }
+        });
+    </script>
 </body>
 </html>

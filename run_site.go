@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
@@ -12,7 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
+	"encoding/base64"
+	"github.com/PuerkitoBio/goquery"
 	"github.com/gorilla/mux"
 	"potential-poetry/db"
 )
@@ -37,11 +39,54 @@ type ViewRecipesPageData struct {
 	HasPrev     bool
 }
 
+// MealPlanCookieData defines the structure for data stored in the meal plan cookie.
+type MealPlanCookieData struct {
+	Order  []string    `json:"order"` // Slice of recipe IDs, index corresponds to day of the week.
+	Counts map[int]int `json:"counts"`
+}
+
 // MealPlanPageData holds data for the meal plan page.
 type MealPlanPageData struct {
 	AllRecipes      []db.RecipeInfo
-	SelectedRecipes map[int]bool
+	RecipeCounts    map[int]int // Map of Recipe ID to its count in the meal plan
 	ShoppingList    []db.Ingredient
+	MealOrder       []string
+}
+
+// JSONLDInstruction represents a step in a recipe's method, supporting multiple JSON-LD formats.
+type JSONLDInstruction struct {
+	Type string `json:"@type"`
+	Text string `json:"text"`
+}
+
+// UnmarshalJSON allows JSONLDInstruction to correctly parse recipe steps
+// that are either simple strings or structured "HowToStep" objects.
+func (j *JSONLDInstruction) UnmarshalJSON(data []byte) error {
+	// Try to unmarshal as a string first
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		j.Type = "PlainText"
+		j.Text = s
+		return nil
+	}
+
+	// If it's not a string, unmarshal as a structured object
+	type Alias JSONLDInstruction
+	var a Alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*j = JSONLDInstruction(a)
+	return nil
+}
+
+// JSONLDRecipe represents the structure of a Recipe in JSON-LD format.
+type JSONLDRecipe struct {
+	Type               interface{}         `json:"@type"`
+	Name               string              `json:"name"`
+	RecipeIngredient   []string            `json:"recipeIngredient"`
+	RecipeInstructions []JSONLDInstruction `json:"recipeInstructions"`
+	Keywords           string              `json:"keywords"`
 }
 
 func main() {
@@ -62,6 +107,8 @@ func main() {
 	r.HandleFunc("/", logRequest(genericFileHandler("root.html"))).Methods("GET")
 	r.HandleFunc("/new_page", logRequest(genericFileHandler("new_page.html"))).Methods("GET")
 	r.HandleFunc("/submit_recipe", logRequest(submitRecipePageHandler)).Methods("GET")
+	r.HandleFunc("/import-recipe", logRequest(importRecipePageHandler)).Methods("GET")
+	r.HandleFunc("/handle-import", logRequest(handleImportHandler)).Methods("POST")
 	r.HandleFunc("/recipes", logRequest(viewRecipesHandler)).Methods("GET")
 	r.HandleFunc("/submit_ingredients", logRequest(submitIngredientsHandler)).Methods("POST")
 
@@ -146,11 +193,33 @@ func genericFileHandler(filePath string) http.HandlerFunc {
 }
 
 func submitRecipePageHandler(w http.ResponseWriter, r *http.Request) {
+	const importedRecipeCookieName = "imported-recipe"
 	data := SubmitPageData{
 		// Provide an empty Recipe struct for a new submission form.
-		Recipe:  &db.Recipe{},
+		Recipe: &db.Recipe{},
 	}
 
+	// Check if we are loading an imported recipe from the cookie
+	if r.URL.Query().Get("source") == "import" {
+		if cookie, err := r.Cookie(importedRecipeCookieName); err == nil {
+			// Clear the cookie immediately so it's only used once
+			http.SetCookie(w, &http.Cookie{
+				Name:     importedRecipeCookieName,
+				Value:    "",
+				Path:     "/",
+				Expires:  time.Unix(0, 0),
+				HttpOnly: true,
+			})
+
+			var recipe db.Recipe
+			if err := json.Unmarshal([]byte(cookie.Value), &recipe); err == nil {
+				data.Recipe = &recipe
+				log.Printf("Loaded imported recipe '%s' for review.", recipe.Title)
+			} else {
+				log.Printf("Error unmarshalling imported recipe from cookie: %v", err)
+			}
+		}
+	}
 	tmpl, err := template.ParseFiles("web/submit_recipe.html")
 	if err != nil {
 		log.Printf("Error parsing template: %v", err)
@@ -394,41 +463,133 @@ func mealPlanHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		recipeIDsStr := r.PostForm["recipe_ids"]
-		cookieValue := strings.Join(recipeIDsStr, ",")
+		cookieData := MealPlanCookieData{
+			Counts: make(map[int]int),
+			Order:  make([]string, 7), // 7 days
+		}
+
+		// Regex to find count inputs, e.g., "count_123"
+		re := regexp.MustCompile(`^count_(\d+)$`)
+
+		for key, values := range r.PostForm {
+			if len(values) == 0 {
+				continue
+			}
+			matches := re.FindStringSubmatch(key)
+			if len(matches) == 2 {
+				recipeIDStr := matches[1]
+				countStr := values[0]
+				recipeID, _ := strconv.Atoi(recipeIDStr)
+				count, err := strconv.Atoi(countStr)
+				if err != nil || count < 0 {
+					continue // Ignore invalid or negative counts
+				}
+
+				if count > 0 {
+					cookieData.Counts[recipeID] = count
+				}
+			}
+		}
+
+		// Process the meal_order input which contains the visual order of meals
+		orderStr := r.PostFormValue("meal_order")
+		// var orderParts []string
+		if orderStr != "" {
+			orderParts := strings.Split(orderStr, ",")
+
+			// Ensure the order slice has exactly 7 elements
+			for i := 0; i < 7; i++ {
+				if i < len(orderParts) && orderParts[i] != "" {
+					recipeIDStr := orderParts[i]
+					recipeID, _ := strconv.Atoi(recipeIDStr)
+					_, ok := cookieData.Counts[recipeID]
+					if ok {
+						cookieData.Order[i] = recipeIDStr //Only add to the order if the recipeId is in the counts.
+					} else {
+						cookieData.Order[i] = "" // set order to empty string as the recipe count doesnt exist.
+					}
+				} else {
+					cookieData.Order[i] = "" // Ensure empty days are empty strings
+				}
+			}
+
+			//Also populate the meal order from the counts, this ensures they are in both places.
+		}
+
+		// Process the meal_order input which contains the visual order of meals
+		//if orderStr != "" {
+		//	orderParts := strings.Split(orderStr, ",")
+		//	// Ensure the order slice has exactly 7 elements
+		//  for i := 0; i < 7; i++ {
+		//		if i < len(orderParts) && orderParts[i] != "" {
+		//  recipeIDStr := orderParts[i]
+		//  _, err := strconv.Atoi(recipeIDStr)
+		//    if err == nil {
+		//      cookieData.Order[i] = recipeIDStr  //Only add to the order if the recipeId is in the counts.
+		//    }
+		//		} else {
+		//			cookieData.Order[i] = "" // Ensure empty days are empty strings
+		//		}
+		//}
+
+		// Marshal the JSON
+		var err error
+
+		cookieJSON, err := json.Marshal(cookieData)
+		if err != nil {
+			log.Printf("Error marshalling meal plan cookie data: %v", err)
+			http.Error(w, "Failed to save meal plan", http.StatusInternalServerError)
+			return
+		}
+
+		// Base64 encode the JSON data
+		encodedCookieValue := base64.StdEncoding.EncodeToString(cookieJSON)
 
 		http.SetCookie(w, &http.Cookie{
 			Name:     mealPlanCookieName,
-			Value:    cookieValue,
+			Value:    encodedCookieValue,
 			Path:     "/",
 			Expires:  time.Now().Add(30 * 24 * time.Hour), // Expires in 30 days
 			HttpOnly: true,
 		})
 
-		// Redirect to the GET handler to display the plan
 		http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
 		return
 	}
 
-	// GET request logic to display the current meal plan
-	var recipeIDs []int
-	selectedRecipesMap := make(map[int]bool)
+	recipeCounts := make(map[int]int)
+	mealOrder := make([]string, 7) // Default to 7 empty days
 
 	if cookie, err := r.Cookie(mealPlanCookieName); err == nil && cookie.Value != "" {
-		idStrs := strings.Split(cookie.Value, ",")
-		for _, idStr := range idStrs {
-			id, err := strconv.Atoi(idStr)
-			if err == nil {
-				recipeIDs = append(recipeIDs, id)
-				selectedRecipesMap[id] = true
+
+
+		decodedCookieValue, err := base64.StdEncoding.DecodeString(cookie.Value)
+		if(err != nil) {
+			log.Printf("Could not decode meal plan cookie: %v. Clearing invalid cookie.", err)
+			clearMealPlanCookie(w, mealPlanCookieName)
+			http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
+			return // Important to return after a redirect
+		}
+		var cookieData MealPlanCookieData
+		if err := json.Unmarshal([]byte(decodedCookieValue), &cookieData); err == nil {
+			if cookieData.Counts != nil {
+				recipeCounts = cookieData.Counts
 			}
+			if len(cookieData.Order) == 7 {
+				mealOrder = cookieData.Order
+			}
+		} else {
+			log.Printf("Could not unmarshal meal plan cookie: %v. Clearing invalid cookie.", err)
+			clearMealPlanCookie(w, mealPlanCookieName)
+			http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
+			return // Important to return after a redirect
 		}
 	}
 
 	var shoppingList []db.Ingredient
-	if len(recipeIDs) > 0 {
+	if len(recipeCounts) > 0 {
 		var err error
-		shoppingList, err = consolidateIngredients(recipeIDs)
+		shoppingList, err = consolidateIngredients(recipeCounts)
 		if err != nil {
 			log.Printf("Error consolidating ingredients: %v", err)
 			http.Error(w, "Failed to generate shopping list", http.StatusInternalServerError)
@@ -444,11 +605,145 @@ func mealPlanHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := MealPlanPageData{
-		AllRecipes:      allRecipes,
-		SelectedRecipes: selectedRecipesMap,
-		ShoppingList:    shoppingList,
+		AllRecipes:   allRecipes,
+		RecipeCounts: recipeCounts,
+		ShoppingList: shoppingList,
+		MealOrder:    mealOrder,
 	}
 	renderMealPlanTemplate(w, data)
+}
+
+func clearMealPlanCookie(w http.ResponseWriter, cookieName string) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     cookieName,
+			Value:    "",
+			Path:     "/",
+			Expires:  time.Unix(0, 0),
+			HttpOnly: true,
+		})
+}
+
+func importRecipePageHandler(w http.ResponseWriter, r *http.Request) {
+	renderTemplate(w, "web/import_recipe.html", nil)
+}
+
+func handleImportHandler(w http.ResponseWriter, r *http.Request) {
+	const importedRecipeCookieName = "imported-recipe"
+	url := r.PostFormValue("recipeUrl")
+	if url == "" {
+		http.Error(w, "URL is required", http.StatusBadRequest)
+		return
+	}
+
+	res, err := http.Get(url)
+	if err != nil {
+		log.Printf("Error fetching URL %s: %v", url, err)
+		http.Error(w, "Failed to fetch the recipe URL.", http.StatusInternalServerError)
+		return
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		log.Printf("URL %s returned status code %d", url, res.StatusCode)
+		http.Error(w, fmt.Sprintf("Failed to fetch the recipe URL (status: %d).", res.StatusCode), http.StatusInternalServerError)
+		return
+	}
+
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		log.Printf("Error parsing HTML from %s: %v", url, err)
+		http.Error(w, "Failed to parse the recipe page.", http.StatusInternalServerError)
+		return
+	}
+
+	var recipe *db.Recipe
+	doc.Find("script[type=\"application/ld+json\"]").EachWithBreak(func(i int, s *goquery.Selection) bool {
+		var ldData []JSONLDRecipe
+		// JSON-LD can be a single object or an array of objects. Try array first.
+		if err := json.Unmarshal([]byte(s.Text()), &ldData); err == nil {
+			for _, item := range ldData {
+				if isRecipeType(item.Type) {
+					recipe = convertJSONLDToRecipe(item)
+					return false // Stop searching
+				}
+			}
+		} else {
+			// If array fails, try a single object.
+			var singleLDData JSONLDRecipe
+			if err := json.Unmarshal([]byte(s.Text()), &singleLDData); err == nil {
+				if isRecipeType(singleLDData.Type) {
+					recipe = convertJSONLDToRecipe(singleLDData)
+					return false // Stop searching
+				}
+			}
+		}
+		return true // Continue searching
+	})
+
+	if recipe == nil {
+		log.Printf("No recipe JSON-LD found on %s", url)
+		http.Error(w, "Could not find a recipe on that page. This feature works best with sites that use modern recipe standards (JSON-LD).", http.StatusUnprocessableEntity)
+		return
+	}
+
+	recipeJSON, err := json.Marshal(recipe)
+	if err != nil {
+		log.Printf("Error marshalling scraped recipe to JSON: %v", err)
+		http.Error(w, "Failed to process scraped recipe.", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     importedRecipeCookieName,
+		Value:    string(recipeJSON),
+		Path:     "/",
+		Expires:  time.Now().Add(10 * time.Minute), // Short-lived cookie
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	http.Redirect(w, r, "/submit_recipe?source=import", http.StatusSeeOther)
+}
+
+// isRecipeType checks if a JSON-LD object's type field indicates it's a recipe.
+func isRecipeType(t interface{}) bool {
+	if typeStr, ok := t.(string); ok {
+		return strings.Contains(typeStr, "Recipe")
+	}
+	if typeArr, ok := t.([]interface{}); ok {
+		for _, item := range typeArr {
+			if str, ok := item.(string); ok && strings.Contains(str, "Recipe") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// convertJSONLDToRecipe transforms a scraped JSON-LD recipe into our internal Recipe struct.
+func convertJSONLDToRecipe(ld JSONLDRecipe) *db.Recipe {
+	recipe := &db.Recipe{
+		Title: ld.Name,
+	}
+
+	for _, ingStr := range ld.RecipeIngredient {
+		recipe.Ingredients = append(recipe.Ingredients, db.Ingredient{Name: ingStr})
+	}
+
+	for i, inst := range ld.RecipeInstructions {
+		recipe.Method = append(recipe.Method, db.MethodStep{
+			StepNumber:  i + 1,
+			Description: inst.Text,
+		})
+	}
+
+	if ld.Keywords != "" {
+		tags := strings.Split(ld.Keywords, ",")
+		for _, tag := range tags {
+			recipe.Categories = append(recipe.Categories, db.Category{Name: strings.TrimSpace(tag)})
+		}
+	}
+	return recipe
 }
 
 func renderTemplate(w http.ResponseWriter, templateFile string, data interface{}) {
@@ -483,11 +778,12 @@ func renderMealPlanTemplate(w http.ResponseWriter, data MealPlanPageData) {
 }
 
 // consolidateIngredients fetches ingredients for selected recipes and consolidates them.
-func consolidateIngredients(recipeIDs []int) ([]db.Ingredient, error) {
+func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 	// map[IngredientName]map[Measurement]Amount
 	consolidated := make(map[string]map[string]float64)
+	var shoppingList []db.Ingredient
 
-	for _, id := range recipeIDs {
+	for id, countMultiplier := range recipeCounts {
 		recipe, err := db.FetchRecipeByID(id)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -500,9 +796,15 @@ func consolidateIngredients(recipeIDs []int) ([]db.Ingredient, error) {
 		for _, ing := range recipe.Ingredients {
 			amount, err := strconv.ParseFloat(ing.Amount, 64)
 			if err != nil {
-				log.Printf("Could not parse amount '%s' for ingredient '%s', skipping aggregation", ing.Amount, ing.Name)
-				continue
+				// Could not parse amount, so we can't aggregate it.
+				// Add it to the shopping list as-is for each time the recipe is included.
+				for i := 0; i < countMultiplier; i++ {
+					shoppingList = append(shoppingList, ing)
+				}
+				continue // Move to the next ingredient
 			}
+
+			totalAmount := amount * float64(countMultiplier)
 
 			// Normalize name and measurement for better consolidation.
 			name := strings.ToLower(strings.TrimSpace(ing.Name))
@@ -516,11 +818,10 @@ func consolidateIngredients(recipeIDs []int) ([]db.Ingredient, error) {
 			if _, ok := consolidated[name]; !ok {
 				consolidated[name] = make(map[string]float64)
 			}
-			consolidated[name][measurement] += amount
+			consolidated[name][measurement] += totalAmount
 		}
 	}
 
-	var shoppingList []db.Ingredient
 	for name, measurementMap := range consolidated {
 		for measurement, amount := range measurementMap {
 			shoppingList = append(shoppingList, db.Ingredient{
@@ -624,11 +925,7 @@ func parseIngredientsForm(r *http.Request) ([]db.Ingredient, error) {
 		case "name":
 			ingredient.Name = value
 		case "amount":
-			// Validate that the amount is a number before assigning it.
-			if _, err := strconv.ParseFloat(value, 64); err != nil {
-				// The row number is index + 1 for a user-friendly message.
-				return nil, fmt.Errorf("invalid amount in row %d: '%s' is not a valid number", index+1, value)
-			}
+			// Allow non-numeric amounts like "a pinch"
 			ingredient.Amount = value
 		case "measurement":
 			ingredient.Measurement = value

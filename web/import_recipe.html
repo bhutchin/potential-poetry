@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Import Recipe</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="content-container">
+        <h1>Import Recipe from URL</h1>
+        <p>Enter the URL of a recipe page and we'll try to import it for you. This works best with modern recipe sites that use structured data.</p>
+
+        <form action="/handle-import" method="post" class="import-form">
+            <div class="form-group">
+                <label for="recipeUrl">Recipe URL</label>
+                <input type="url" id="recipeUrl" name="recipeUrl" class="search-input" placeholder="https://www.example.com/your-favorite-recipe" required>
+            </div>
+            <button type="submit" class="submit-button">Import Recipe</button>
+        </form>
+    </div>
+</body>
+</html>
