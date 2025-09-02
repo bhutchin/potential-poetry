@@ -1,68 +1,76 @@
--- This script inserts sample recipes into the database if they don't already exist.
-DO $$
-DECLARE
-    recipe_id_1 INT;
-    recipe_id_2 INT;
-    category_id_dessert INT;
-    category_id_baking INT;
-    category_id_dinner INT;
-    category_id_quick INT;
-BEGIN
-    -- Check if sample data already exists to prevent duplicate entries on re-init
-    IF EXISTS (SELECT 1 FROM recipes WHERE title = 'Classic Chocolate Chip Cookies') THEN
-        RAISE NOTICE 'Sample recipes already exist. Skipping insertion.';
-        RETURN;
-    END IF;
+-- This script populates the database with some sample recipes.
+-- It will run after 01-schema.sql when the database is first created.
 
-    RAISE NOTICE 'Inserting sample recipes...';
+-- Sample Recipe 1: Classic Chocolate Chip Cookies
+WITH recipe1 AS (
+    INSERT INTO recipes (title, source_url, servings)
+    VALUES ('Classic Chocolate Chip Cookies', 'https://www.example.com/cookies', 24)
+    RETURNING id
+)
+INSERT INTO ingredients (recipe_id, name, amount, unit)
+SELECT id, name, amount, unit FROM recipe1, (VALUES
+    ('All-Purpose Flour', '2.25', 'cups'),
+    ('Baking Soda', '1', 'tsp'),
+    ('Salt', '1', 'tsp'),
+    ('Unsalted Butter, softened', '1', 'cup'),
+    ('Granulated Sugar', '0.75', 'cup'),
+    ('Packed Brown Sugar', '0.75', 'cup'),
+    ('Vanilla Extract', '1', 'tsp'),
+    ('Large Eggs', '2', ''),
+    ('Semi-Sweet Chocolate Chips', '2', 'cups')
+) AS ing(name, amount, unit);
 
-    -- Insert categories and get their IDs
-    INSERT INTO categories (name) VALUES ('dessert') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id INTO category_id_dessert;
-    INSERT INTO categories (name) VALUES ('baking') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id INTO category_id_baking;
-    INSERT INTO categories (name) VALUES ('dinner') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id INTO category_id_dinner;
-    INSERT INTO categories (name) VALUES ('quick') ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id INTO category_id_quick;
+WITH recipe1 AS (
+    SELECT id FROM recipes WHERE title = 'Classic Chocolate Chip Cookies'
+)
+INSERT INTO method_steps (recipe_id, step_number, description)
+SELECT id, step_number, description FROM recipe1, (VALUES
+    (1, 'Preheat oven to 375°F (190°C).'),
+    (2, 'In a small bowl, whisk together flour, baking soda, and salt.'),
+    (3, 'In a large bowl, beat butter, granulated sugar, brown sugar, and vanilla extract until creamy. Add eggs, one at a time, beating well after each addition.'),
+    (4, 'Gradually beat in flour mixture. Stir in chocolate chips.'),
+    (5, 'Drop by rounded tablespoon onto ungreased baking sheets.'),
+    (6, 'Bake for 9 to 11 minutes or until golden brown. Cool on baking sheets for 2 minutes; remove to wire racks to cool completely.')
+) AS steps(step_number, description);
 
-    -- Recipe 1: Chocolate Chip Cookies
-    INSERT INTO recipes (title, source_url) VALUES ('Classic Chocolate Chip Cookies', 'https://example.com/recipes/chocolate-chip-cookies') RETURNING id INTO recipe_id_1;
+WITH cat_dessert AS (INSERT INTO categories (name) VALUES ('dessert') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id),
+     cat_baking AS (INSERT INTO categories (name) VALUES ('baking') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id),
+     cat_classic AS (INSERT INTO categories (name) VALUES ('classic') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id),
+     recipe1 AS (SELECT id FROM recipes WHERE title = 'Classic Chocolate Chip Cookies')
+INSERT INTO recipe_categories (recipe_id, category_id)
+SELECT r1.id, cid.id FROM recipe1 r1, (SELECT id FROM cat_dessert UNION ALL SELECT id FROM cat_baking UNION ALL SELECT id FROM cat_classic) AS cid;
 
-    -- Ingredients for Recipe 1
-    INSERT INTO ingredients (recipe_id, name, amount, unit) VALUES
-        (recipe_id_1, 'all-purpose flour', '2.25', 'cups'),
-        (recipe_id_1, 'baking soda', '1', 'teaspoon'),
-        (recipe_id_1, 'salt', '0.5', 'teaspoon'),
-        (recipe_id_1, 'unsalted butter, softened', '1', 'cup'),
-        (recipe_id_1, 'granulated sugar', '0.75', 'cup'),
-        (recipe_id_1, 'packed brown sugar', '0.75', 'cup'),
-        (recipe_id_1, 'vanilla extract', '1', 'teaspoon'),
-        (recipe_id_1, 'large eggs', '2', ''),
-        (recipe_id_1, 'semi-sweet chocolate chips', '2', 'cups');
 
-    -- Method for Recipe 1
-    INSERT INTO method_steps (recipe_id, step_number, description) VALUES
-        (recipe_id_1, 1, 'Preheat oven to 375°F (190°C).'),
-        (recipe_id_1, 2, 'Combine flour, baking soda, and salt in a small bowl.'),
-        (recipe_id_1, 3, 'Beat butter, granulated sugar, brown sugar, and vanilla extract in a large mixer bowl until creamy.'),
-        (recipe_id_1, 4, 'Add eggs, one at a time, beating well after each addition.'),
-        (recipe_id_1, 5, 'Gradually beat in flour mixture.'),
-        (recipe_id_1, 6, 'Stir in chocolate chips.'),
-        (recipe_id_1, 7, 'Drop by rounded tablespoon onto ungreased baking sheets.'),
-        (recipe_id_1, 8, 'Bake for 9 to 11 minutes or until golden brown. Cool on baking sheets for 2 minutes; remove to wire racks to cool completely.');
+-- Sample Recipe 2: Simple Tomato Pasta
+WITH recipe2 AS (
+    INSERT INTO recipes (title, source_url, servings)
+    VALUES ('Simple Tomato Pasta', 'https://www.example.com/pasta', 4)
+    RETURNING id
+)
+INSERT INTO ingredients (recipe_id, name, amount, unit)
+SELECT id, name, amount, unit FROM recipe2, (VALUES
+    ('Spaghetti', '1', 'pound'),
+    ('Olive Oil', '2', 'tbsp'),
+    ('Garlic, minced', '4', 'cloves'),
+    ('Crushed Tomatoes', '28', 'ounce'),
+    ('Dried Oregano', '1', 'tsp'),
+    ('Salt and Pepper', 'to taste', ''),
+    ('Fresh Basil, chopped', '0.25', 'cup')
+) AS ing(name, amount, unit);
 
-    -- Link categories for Recipe 1
-    INSERT INTO recipe_categories (recipe_id, category_id) VALUES (recipe_id_1, category_id_dessert), (recipe_id_1, category_id_baking);
+WITH recipe2 AS (SELECT id FROM recipes WHERE title = 'Simple Tomato Pasta')
+INSERT INTO method_steps (recipe_id, step_number, description)
+SELECT id, step_number, description FROM recipe2, (VALUES
+    (1, 'Cook spaghetti according to package directions. Drain and set aside.'),
+    (2, 'In a large skillet, heat olive oil over medium heat. Add garlic and cook until fragrant, about 1 minute.'),
+    (3, 'Stir in crushed tomatoes and oregano. Season with salt and pepper. Bring to a simmer and cook for 10 minutes.'),
+    (4, 'Stir in the cooked spaghetti and fresh basil. Serve immediately.')
+) AS steps(step_number, description);
 
-    -- Recipe 2: Simple Tomato Pasta
-    INSERT INTO recipes (title) VALUES ('Quick Tomato Pasta') RETURNING id INTO recipe_id_2;
-
-    -- Ingredients for Recipe 2
-    INSERT INTO ingredients (recipe_id, name, amount, unit) VALUES
-        (recipe_id_2, 'pasta (like spaghetti or penne)', '1', 'pound'), (recipe_id_2, 'olive oil', '2', 'tablespoons'), (recipe_id_2, 'garlic, minced', '3', 'cloves'), (recipe_id_2, 'canned crushed tomatoes', '28', 'ounces'), (recipe_id_2, 'dried oregano', '1', 'teaspoon'), (recipe_id_2, 'salt', '0.5', 'teaspoon'), (recipe_id_2, 'black pepper', '0.25', 'teaspoon'), (recipe_id_2, 'fresh basil, chopped', '0.25', 'cup');
-
-    -- Method for Recipe 2
-    INSERT INTO method_steps (recipe_id, step_number, description) VALUES
-        (recipe_id_2, 1, 'Cook pasta according to package directions. Drain and set aside.'), (recipe_id_2, 2, 'While pasta is cooking, heat olive oil in a large skillet over medium heat.'), (recipe_id_2, 3, 'Add garlic and cook until fragrant, about 1 minute.'), (recipe_id_2, 4, 'Stir in crushed tomatoes, oregano, salt, and pepper. Bring to a simmer and cook for 10 minutes, stirring occasionally.'), (recipe_id_2, 5, 'Stir in the cooked pasta and fresh basil. Serve immediately.');
-
-    -- Link categories for Recipe 2
-    INSERT INTO recipe_categories (recipe_id, category_id) VALUES (recipe_id_2, category_id_dinner), (recipe_id_2, category_id_quick);
-
-END $$;
+WITH cat_dinner AS (INSERT INTO categories (name) VALUES ('dinner') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id),
+     cat_pasta AS (INSERT INTO categories (name) VALUES ('pasta') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id),
+     cat_quick AS (INSERT INTO categories (name) VALUES ('quick') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id),
+     cat_vegetarian AS (INSERT INTO categories (name) VALUES ('vegetarian') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id),
+     recipe2 AS (SELECT id FROM recipes WHERE title = 'Simple Tomato Pasta')
+INSERT INTO recipe_categories (recipe_id, category_id)
+SELECT r2.id, cid.id FROM recipe2 r2, (SELECT id FROM cat_dinner UNION ALL SELECT id FROM cat_pasta UNION ALL SELECT id FROM cat_quick UNION ALL SELECT id FROM cat_vegetarian) AS cid;

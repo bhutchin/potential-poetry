@@ -32,6 +32,7 @@ type Recipe struct {
 	ID          int
 	Title       string
 	SourceURL   sql.NullString // For the original URL of an imported recipe
+	Servings    int
 	CreatedAt   time.Time
 	Ingredients []Ingredient
 	Method      []MethodStep
@@ -118,7 +119,7 @@ func DuplicateRecipeByID(id int) (int, error) {
 	// 2. Create the new recipe with a modified title
 	newTitle := originalRecipe.Title + " (Copy)"
 	var newRecipeID int
-	err = tx.QueryRow("INSERT INTO recipes (title, source_url) VALUES ($1, $2) RETURNING id", newTitle, originalRecipe.SourceURL).Scan(&newRecipeID)
+	err = tx.QueryRow("INSERT INTO recipes (title, source_url, servings) VALUES ($1, $2, $3) RETURNING id", newTitle, originalRecipe.SourceURL, originalRecipe.Servings).Scan(&newRecipeID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create new recipe during duplication: %w", err)
 	}
@@ -174,7 +175,7 @@ func DuplicateRecipeByID(id int) (int, error) {
 }
 
 // UpdateRecipe updates an existing recipe, its ingredients, and method steps in a transaction.
-func UpdateRecipe(id int, title string, sourceURL string, ingredients []Ingredient, method []MethodStep, tags []string) error {
+func UpdateRecipe(id int, title string, sourceURL string, servings int, ingredients []Ingredient, method []MethodStep, tags []string) error {
 	tx, err := conn.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -187,7 +188,7 @@ func UpdateRecipe(id int, title string, sourceURL string, ingredients []Ingredie
 		sourceURLValue.String = sourceURL
 		sourceURLValue.Valid = true
 	}
-	_, err = tx.Exec("UPDATE recipes SET title = $1, source_url = $2 WHERE id = $3", title, sourceURLValue, id)
+	_, err = tx.Exec("UPDATE recipes SET title = $1, source_url = $2, servings = $3 WHERE id = $4", title, sourceURLValue, servings, id)
 	if err != nil {
 		return fmt.Errorf("failed to update recipe title: %w", err)
 	}
@@ -287,8 +288,8 @@ func FetchAllRecipeInfos() ([]RecipeInfo, error) {
 // FetchRecipeByID retrieves a single recipe and its details from the database.
 func FetchRecipeByID(id int) (*Recipe, error) {
 	recipe := &Recipe{}
-	queryRecipe := "SELECT id, title, source_url, created_at FROM recipes WHERE id = $1"
-	err := conn.QueryRow(queryRecipe, id).Scan(&recipe.ID, &recipe.Title, &recipe.SourceURL, &recipe.CreatedAt)
+	queryRecipe := "SELECT id, title, source_url, servings, created_at FROM recipes WHERE id = $1"
+	err := conn.QueryRow(queryRecipe, id).Scan(&recipe.ID, &recipe.Title, &recipe.SourceURL, &recipe.Servings, &recipe.CreatedAt)
 	if err != nil {
 		return nil, err // Returns sql.ErrNoRows if not found
 	}
@@ -516,7 +517,7 @@ func DeleteNamedMealPlan(id int) error {
 }
 
 // SaveRecipe saves a new recipe and its components to the database in a single transaction.
-func SaveRecipe(title string, sourceURL string, ingredients []Ingredient, method []MethodStep, tags []string) (int, error) {
+func SaveRecipe(title string, sourceURL string, servings int, ingredients []Ingredient, method []MethodStep, tags []string) (int, error) {
 	tx, err := conn.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
@@ -530,7 +531,7 @@ func SaveRecipe(title string, sourceURL string, ingredients []Ingredient, method
 	}
 
 	var recipeID int
-	err = tx.QueryRow("INSERT INTO recipes (title, source_url) VALUES ($1, $2) RETURNING id", title, sourceURLValue).Scan(&recipeID)
+	err = tx.QueryRow("INSERT INTO recipes (title, source_url, servings) VALUES ($1, $2, $3) RETURNING id", title, sourceURLValue, servings).Scan(&recipeID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create recipe: %w", err)
 	}

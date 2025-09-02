@@ -5,194 +5,68 @@
     <title>Printable Shopping List</title>
     <style>
         body {
-            /* Dark theme to match the rest of the site */
-            background-color: #121212;
-            color: #E0E0E0;
             font-family: Arial, sans-serif;
-            padding: 40px 20px;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            /* Style to match .content-container */
-            background-color: #1E1E1E;
-            padding: 20px 40px;
-            border-radius: 8px;
-            border: 1px solid #3A3A3A;
+            margin: 20px;
+            color: #000;
         }
         h1 {
-            text-align: center;
-            border-bottom: 1px solid #3A3A3A;
+            border-bottom: 2px solid #333;
             padding-bottom: 10px;
-            margin-bottom: 20px;
-            font-weight: 300;
-            color: #FFFFFF;
         }
-        .shopping-list {
-            list-style-type: none;
-            padding: 0;
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
         }
-        .list-item {
-            padding: 8px 0;
-            border-bottom: 1px solid #3A3A3A;
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
         }
-        .item-name {
-            font-weight: 500;
-        }
-        .item-details {
-            color: #B0BEC5;
-            white-space: nowrap;
+        th {
+            background-color: #f2f2f2;
         }
         @media print {
-            /* Override dark theme for printing to save ink */
-            body {
-                background-color: #fff !important;
-                color: #000 !important;
-                margin: 1cm;
-                font-size: 11pt;
-                padding: 0;
-            }
-            .container {
-                background-color: #fff !important;
-                border: none !important;
-                box-shadow: none !important;
-                padding: 0 !important;
-            }
-            h1 {
-                color: #000 !important;
-                border-bottom: 2px solid #eee !important;
-            }
-            .list-item {
-                border-bottom: 1px solid #f0f0f0 !important;
-            }
-            .no-print {
+            .print-button {
                 display: none;
             }
         }
-        .print-actions {
-            text-align: center;
-            margin-top: 30px;
-            display: flex;
-            gap: 10px;
-            justify-content: center;
-        }
         .print-button {
             padding: 10px 20px;
-            background-color: #2196F3; /* Blue, consistent with main site */
+            background-color: #4CAF50;
             color: white;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 1em;
-            transition: background-color 0.2s ease-in-out;
-        }
-        .print-button:hover {
-            background-color: #1976D2; /* Darker blue */
-        }
-        .copy-button {
-            padding: 10px 20px;
-            background-color: #4CAF50; /* Green */
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 1em;
-            transition: background-color 0.2s ease-in-out;
-        }
-        .copy-button:hover {
-            background-color: #388E3C; /* Darker Green */
-        }
-        .copy-button:disabled {
-            background-color: #9E9E9E; /* A neutral grey */
-            cursor: not-allowed;
-        }
-        .return-button {
-            padding: 10px 20px;
-            background-color: #616161; /* A neutral grey */
-            color: white;
-            text-decoration: none;
-            border-radius: 4px;
-            font-size: 1em;
-            transition: background-color 0.2s ease-in-out;
-        }
-        .return-button:hover {
-            background-color: #424242;
+            font-size: 16px;
+            margin-bottom: 20px;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Shopping List</h1>
-        {{if .ShoppingList}}
-            <ul class="shopping-list">
-                {{range .ShoppingList}}
-                <li class="list-item">
-                    <span class="item-name">{{.Name}}</span>{{if .Amount}}<span class="item-details">&nbsp;x {{.Amount}} {{.Measurement}}</span>{{end}}
-                </li>
-                {{end}}
-            </ul>
-        {{else}}
-            <p>Your shopping list is empty.</p>
-        {{end}}
-        <div class="print-actions no-print">
-            <a href="/meal-plan" class="return-button">Return to Meal Plan</a>
-            <button id="copy-button" class="copy-button">Copy to Clipboard</button>
-            <button onclick="window.print()" class="print-button">Print List</button>
-        </div>
-    </div>
-
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            const copyButton = document.getElementById('copy-button');
-            const listItems = document.querySelectorAll('.shopping-list .list-item');
-
-            // The Clipboard API requires a secure context (HTTPS or localhost).
-            // First, check if the API is available.
-            if (!navigator.clipboard) {
-                if (copyButton) {
-                    // Disable the button and inform the user why.
-                    copyButton.disabled = true;
-                    copyButton.title = 'Clipboard access is not available in this context (requires HTTPS or localhost).';
-                }
-                return; // Exit if the API is not supported.
-            }
-
-            if (copyButton && listItems.length > 0) {
-                copyButton.addEventListener('click', () => {
-                    let listText = '';
-
-                    listItems.forEach(item => {
-                        const nameSpan = item.querySelector('.item-name');
-                        const detailsSpan = item.querySelector('.item-details');
-                        const name = nameSpan ? nameSpan.textContent.trim() : '';
-
-                        if (detailsSpan) {
-                            // Replace the non-breaking space (&nbsp;) and trim to get clean details.
-                            const detailsText = detailsSpan.textContent.replace(/\u00A0/g, ' ').trim();
-                            listText += `${name} ${detailsText}\n`;
-                        } else {
-                            listText += `${name}\n`;
-                        }
-                    });
-
-                    navigator.clipboard.writeText(listText).then(() => {
-                        const originalText = copyButton.textContent;
-                        copyButton.textContent = 'Copied!';
-                        copyButton.disabled = true;
-                        setTimeout(() => {
-                            copyButton.textContent = originalText;
-                            copyButton.disabled = false;
-                        }, 2000);
-                    }).catch(err => {
-                        console.error('Failed to copy text: ', err);
-                        alert('Could not copy to clipboard. An error occurred.');
-                    });
-                });
-            } else if (copyButton) {
-                // If there are no items, disable the button.
-                copyButton.disabled = true;
-            }
-        });
-    </script>
+    <h1>Shopping List</h1>
+    <button onclick="window.print()" class="print-button">Print List</button>
+    <table>
+        <thead>
+            <tr>
+                <th>Ingredient</th>
+                <th>Amount</th>
+                <th>Unit</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .ShoppingList}}
+            <tr>
+                <td>{{.Name}}</td>
+                <td>{{.Amount}}</td>
+                <td>{{.Unit}}</td>
+            </tr>
+            {{else}}
+            <tr>
+                <td colspan="3">Your shopping list is empty.</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
 </body>
 </html>

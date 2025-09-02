@@ -368,6 +368,17 @@ body {
     gap: 10px;
 }
 
+.cook-mode-button {
+    padding: 10px 20px;
+    background-color: #ff9800; /* Orange, matches import */
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 16px;
+}
+
 .delete-form,
 .duplicate-form {
     margin: 0;
@@ -408,6 +419,21 @@ body {
     background-color: #7B1FA2; /* Darker purple */
 }
 
+/* Servings Adjuster on Recipe Detail Page */
+.ingredients-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid #3A3A3A;
+    margin-bottom: 15px;
+}
+
+.servings-adjuster input[type="number"] {
+    width: 60px;
+    text-align: center;
+    padding: 8px;
+}
+
 /* Home Page Specific Styles */
 .home-page {
     text-align: center;
@@ -438,6 +464,8 @@ body {
     text-align: center;
     color: white;
     transition: background-color 0.2s ease-in-out, transform 0.1s ease;
+    border: none; /* Ensure buttons don't have a default border */
+    cursor: pointer; /* Ensure consistent pointer cursor */
 }
 
 .nav-button.view-recipes { background-color: #2196F3; }
@@ -470,22 +498,6 @@ body {
     font-size: 16px;
     background-color: #252525;
     color: #E0E0E0;
-}
-
-.search-button {
-    padding: 12px 25px; /* Match nav-button for consistent size */
-    background-color: #2196F3;
-    color: white;
-    border: none;
-    border-radius: 5px; /* Match border-radius of nav-button */
-    cursor: pointer;
-    font-size: 16px;
-    font-weight: bold; /* Match nav-button for consistent style */
-    transition: background-color 0.2s ease-in-out;
-}
-
-.search-button:hover {
-    background-color: #1976D2;
 }
 
 /* Container for header actions on list pages (e.g., search and add button) */
@@ -1066,3 +1078,87 @@ body {
     white-space: pre-wrap; /* Allows text to wrap */
     word-wrap: break-word; /* Breaks long words */
 }
+
+/* Cook Mode Styles */
+.cook-mode-active {
+    overflow: hidden; /* Prevent scrolling of the main page */
+}
+
+.cook-mode-active .content-container,
+.cook-mode-active .page-footer-nav {
+    display: none; /* Hide main content when cook mode is active */
+}
+
+.cook-mode-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #121212;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+#cook-mode-content {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    width: 100%;
+    max-width: 800px;
+    overflow-y: auto;
+}
+
+#cook-mode-content h2 {
+    font-size: 2.5em;
+    color: #009688;
+    text-align: center;
+}
+
+#cook-mode-content ul {
+    font-size: 1.5em;
+    line-height: 1.8;
+    list-style-position: inside;
+}
+
+.cook-mode-step-counter {
+    font-size: 1.2em;
+    color: #9E9E9E;
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.cook-mode-step-text {
+    font-size: 2.5em;
+    line-height: 1.5;
+    text-align: center;
+    color: #E0E0E0;
+}
+
+#cook-mode-nav {
+    flex-shrink: 0;
+    padding: 20px;
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    width: 100%;
+}
+
+#cook-mode-nav button {
+    padding: 15px 30px;
+    font-size: 1.2em;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+#cook-mode-exit { background-color: #616161; color: white; }
+#cook-mode-prev { background-color: #2196F3; color: white; }
+#cook-mode-next { background-color: #4CAF50; color: white; }

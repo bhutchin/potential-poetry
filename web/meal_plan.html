@@ -51,17 +51,15 @@
             <input type="hidden" name="meal_order" id="meal_order_input">
             <div class="meal-plan-actions">
                 <button type="button" id="update-plan-btn" class="submit-button">Update Shopping List</button>
-                {{if .ShoppingList}}
-                <a href="/meal-plan/print" target="_blank" class="print-button">Print List</a>
-                {{end}}
+                <a href="/meal-plan/print" target="_blank" class="print-button" id="print-list-btn" {{if not .ShoppingList}}style="display: none;"{{end}}>Print List</a>
                 <a href="/meal-plan?action=clear" class="clear-button">Clear Plan</a>
             </div>
             </section>
         </form>
 
-        {{if .ShoppingList}}
-        <section aria-labelledby="weekly-plan-title">
-        <h3 id="weekly-plan-title" class="section-title">Weekly Meal Plan {{if gt .TotalMealCount 0}}<span class="title-meta">({{ .TotalMealCount }} {{if eq .TotalMealCount 1}}meal{{else}}meals{{end}} total)</span>{{end}}</h3>        <div class="meal-plan-week">
+        <section id="weekly-plan-section" aria-labelledby="weekly-plan-title" {{if not .ShoppingList}}style="display: none;"{{end}}>
+        <h3 id="weekly-plan-title" class="section-title">Weekly Meal Plan <span class="title-meta">{{if gt .TotalMealCount 0}}({{ .TotalMealCount }} {{if eq .TotalMealCount 1}}meal{{else}}meals{{end}} total){{end}}</span></h3>
+        <div class="meal-plan-week">
             <div class="meal-plan-day">
                 <h4>Sunday</h4>
                 <div class="day-drop-zone"></div>
@@ -93,7 +91,7 @@
         </div>
         </section>
 
-        <section aria-labelledby="shopping-list-title">
+        <section id="shopping-list-section" aria-labelledby="shopping-list-title" {{if not .ShoppingList}}style="display: none;"{{end}}>
         <h3 id="shopping-list-title" class="section-title">Consolidated Shopping List</h3>
         <!-- Unit system controls -->
         <div class="list-controls">
@@ -110,7 +108,7 @@
                     <th class="unit-col">Unit</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="shopping-list-body">
                 {{range .ShoppingList}}
                 <tr>
                     <td>{{.Name}}</td>
@@ -121,7 +119,6 @@
             </tbody>
         </table>
         </section>
-        {{end}}
 
         <section aria-labelledby="saved-plans-title">
         <h3 id="saved-plans-title" class="section-title">Saved Meal Plans</h3>
@@ -368,15 +365,79 @@
                 });
             });
 
-            document.getElementById('update-plan-btn').addEventListener('click', () => {
+            document.getElementById('update-plan-btn').addEventListener('click', (e) => {
+                const button = e.currentTarget;
+                const originalButtonText = button.textContent;
+                button.disabled = true;
+                button.textContent = 'Updating...';
+
+                // 1. Gather data
+                const counts = {};
+                document.querySelectorAll('.recipe-count-input').forEach(input => {
+                    const recipeId = parseInt(input.id.replace('count_', ''), 10);
+                    const count = parseInt(input.value, 10);
+                    if (count > 0) {
+                        counts[recipeId] = count;
+                    }
+                });
+
                 const daySlots = document.querySelectorAll('.day-drop-zone');
                 const order = Array.from(daySlots).map(zone => {
                     const card = zone.querySelector('.meal-card-planner');
                     return card ? card.dataset.recipeId : '';
                 });
-                
-                document.getElementById('meal_order_input').value = order.join(',');
-                document.querySelector('.meal-plan-form').submit();
+
+                const payload = { counts, order };
+
+                // 2. Fetch request
+                fetch('/meal-plan/api/update', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                })
+                .then(response => response.ok ? response.json() : Promise.reject(response))
+                .then(data => {
+                    // 3. Update DOM
+                    const weeklyPlanSection = document.getElementById('weekly-plan-section');
+                    const shoppingListSection = document.getElementById('shopping-list-section');
+                    const printButton = document.getElementById('print-list-btn');
+                    const totalCountSpan = document.querySelector('#weekly-plan-title .title-meta');
+                    const tableBody = document.getElementById('shopping-list-body');
+
+                    if (data.shoppingList && data.shoppingList.length > 0) {
+                        weeklyPlanSection.style.display = 'block';
+                        shoppingListSection.style.display = 'block';
+                        printButton.style.display = 'inline-block';
+
+                        const mealText = data.totalMealCount === 1 ? 'meal' : 'meals';
+                        totalCountSpan.textContent = `(${data.totalMealCount} ${mealText} total)`;
+
+                        tableBody.innerHTML = ''; // Clear existing rows
+                        data.shoppingList.forEach(ing => {
+                            const row = tableBody.insertRow();
+                            row.innerHTML = `<td>${ing.Name}</td><td>${ing.Amount}</td><td>${ing.Unit}</td>`;
+                        });
+                    } else {
+                        weeklyPlanSection.style.display = 'none';
+                        shoppingListSection.style.display = 'none';
+                        printButton.style.display = 'none';
+                    }
+
+                    button.textContent = 'Updated!';
+                })
+                .catch(error => {
+                    console.error('Error updating shopping list:', error);
+                    button.textContent = 'Update Failed!';
+                })
+                .finally(() => {
+                    setTimeout(() => {
+                        button.disabled = false;
+                        button.textContent = originalButtonText;
+                    }, 2000); // Revert button text after 2 seconds
+                });
             });
 
             // --- Initial Page Load ---

@@ -1,14 +1,11 @@
 -- This script sets up the database schema for the Potential Poetry recipe application.
 
--- Enable the pg_trgm extension for faster text searching (used for recipe titles and tags).
--- You may need to run this as a database superuser if you get a permission error.
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
 -- This table stores the main information about each recipe.
 CREATE TABLE recipes (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
     source_url TEXT,
+    servings INTEGER DEFAULT 4,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -19,8 +16,8 @@ CREATE TABLE ingredients (
     id SERIAL PRIMARY KEY,
     recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    amount TEXT,
-    unit TEXT
+    amount TEXT NOT NULL,
+    unit TEXT NOT NULL
 );
 
 -- This table stores the steps for the recipe's method.
@@ -28,14 +25,15 @@ CREATE TABLE method_steps (
     id SERIAL PRIMARY KEY,
     recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
     step_number INTEGER NOT NULL,
-    description TEXT NOT NULL
+    description TEXT NOT NULL,
+    UNIQUE(recipe_id, step_number)
 );
 
 -- This table stores the tags/categories for recipes.
 -- The name of each category must be unique.
 CREATE TABLE categories (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
+    name TEXT UNIQUE NOT NULL
 );
 
 -- This is a join table to create a many-to-many relationship
@@ -49,7 +47,7 @@ CREATE TABLE recipe_categories (
 -- This table stores saved meal plans.
 CREATE TABLE meal_plans (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
+    name TEXT UNIQUE NOT NULL,
     data JSONB NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

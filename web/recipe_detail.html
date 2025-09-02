@@ -27,10 +27,16 @@
             <p class="recipe-date">Created on: {{.Recipe.CreatedAt.Format "January 2, 2006"}}</p>
 
             {{if .Recipe.Ingredients}}
-                <h3>Ingredients</h3>
+                <div class="ingredients-header">
+                    <h3>Ingredients</h3>
+                    <div class="servings-adjuster">
+                        <label for="servings-input">Servings:</label>
+                        <input type="number" id="servings-input" value="{{if .Recipe.Servings}}{{.Recipe.Servings}}{{else}}4{{end}}" min="1" data-original-servings="{{if .Recipe.Servings}}{{.Recipe.Servings}}{{else}}4{{end}}">
+                    </div>
+                </div>
                 <ul class="ingredient-list">
                     {{range .Recipe.Ingredients}}
-                    <li>{{.Amount}} {{if .Unit}}{{.Unit}} {{end}}{{.Name}}</li>
+                    <li data-original-amount="{{.Amount}}"><span class="ing-amount">{{.Amount}}</span> <span class="ing-unit-name">{{if .Unit}}{{.Unit}} {{end}}{{.Name}}</span></li>
                     {{end}}
                 </ul>
             {{else}}
@@ -58,6 +64,7 @@
             {{end}}
 
             <div class="form-actions">
+                <button type="button" id="cook-mode-btn" class="cook-mode-button">Cook Mode</button>
                 <a href="/recipe/edit/{{.Recipe.ID}}" class="edit-button">Edit Recipe</a>
                 <form action="/recipe/duplicate/{{.Recipe.ID}}" method="post" class="duplicate-form">
                     <button type="submit" class="duplicate-button">Duplicate Recipe</button>
@@ -76,5 +83,182 @@
     <div class="page-footer-nav">
         <a href="/recipes" class="nav-button home">Back to All Recipes</a>
     </div>
+
+    <!-- Cook Mode Overlay -->
+    <div id="cook-mode-overlay" style="display: none;">
+        <div id="cook-mode-content">
+            <!-- Content will be injected by JavaScript -->
+        </div>
+        <div id="cook-mode-nav">
+            <button id="cook-mode-exit">Exit</button>
+            <button id="cook-mode-prev" style="display: none;">Previous Step</button>
+            <button id="cook-mode-next">Next Step</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- Recipe Scaling ---
+            const servingsInput = document.getElementById('servings-input');
+            if (servingsInput) {
+                servingsInput.addEventListener('change', scaleIngredients);
+                servingsInput.addEventListener('keyup', scaleIngredients);
+            }
+
+            function parseAmount(amountStr) {
+                if (!amountStr || !/\d/.test(amountStr)) return null;
+                let total = 0;
+                const parts = amountStr.trim().split(' ');
+                for (const part of parts) {
+                    if (part.includes('/')) {
+                        const frac = part.split('/');
+                        if (frac.length === 2) {
+                            const num = parseFloat(frac[0]);
+                            const den = parseFloat(frac[1]);
+                            if (den !== 0) total += num / den;
+                        }
+                    } else {
+                        total += parseFloat(part) || 0;
+                    }
+                }
+                return total;
+            }
+
+            function formatAmount(num) {
+                if (num === 0) return "0";
+                const whole = Math.floor(num);
+                const frac = num - whole;
+                let fracStr = '';
+
+                // Common fractions with a tolerance
+                if (frac > 0.2 && frac < 0.3) fracStr = ' 1/4';
+                else if (frac > 0.3 && frac < 0.4) fracStr = ' 1/3';
+                else if (frac > 0.45 && frac < 0.55) fracStr = ' 1/2';
+                else if (frac > 0.6 && frac < 0.7) fracStr = ' 2/3';
+                else if (frac > 0.7 && frac < 0.8) fracStr = ' 3/4';
+                else if (frac > 0) fracStr = ' ' + frac.toFixed(2).replace(/^0\./, '.');
+
+                let result = '';
+                if (whole > 0) result += whole;
+                result += fracStr;
+                
+                return result.trim();
+            }
+
+            function scaleIngredients() {
+                const originalServings = parseFloat(servingsInput.dataset.originalServings);
+                const newServings = parseFloat(servingsInput.value);
+
+                if (isNaN(originalServings) || isNaN(newServings) || newServings <= 0) {
+                    return;
+                }
+
+                const scaleFactor = newServings / originalServings;
+
+                document.querySelectorAll('.ingredient-list li').forEach(item => {
+                    const originalAmountStr = item.dataset.originalAmount;
+                    const amountSpan = item.querySelector('.ing-amount');
+
+                    const originalAmount = parseAmount(originalAmountStr);
+
+                    if (originalAmount !== null && amountSpan) {
+                        const newAmount = originalAmount * scaleFactor;
+                        amountSpan.textContent = formatAmount(newAmount);
+                    }
+                });
+            }
+
+            // --- Cook Mode ---
+            const cookModeBtn = document.getElementById('cook-mode-btn');
+            const overlay = document.getElementById('cook-mode-overlay');
+            const contentDiv = document.getElementById('cook-mode-content');
+            const exitBtn = document.getElementById('cook-mode-exit');
+            const prevBtn = document.getElementById('cook-mode-prev');
+            const nextBtn = document.getElementById('cook-mode-next');
+            let wakeLock = null;
+            let currentStep = -1; // -1 is the ingredients list
+
+            const methodSteps = Array.from(document.querySelectorAll('.method-list li')).map(li => li.innerHTML);
+
+            async function requestWakeLock() {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Screen Wake Lock is active.');
+                } catch (err) {
+                    console.error(`${err.name}, ${err.message}`);
+                }
+            }
+
+            function showStep(stepIndex) {
+                currentStep = stepIndex;
+                if (stepIndex === -1) { // Ingredients view
+                    const ingredientsHTML = document.querySelector('.ingredient-list').innerHTML;
+                    contentDiv.innerHTML = `<h2>Ingredients</h2><ul>${ingredientsHTML}</ul>`;
+                    prevBtn.style.display = 'none';
+                    nextBtn.textContent = 'Start Cooking';
+                } else { // Method step view
+                    contentDiv.innerHTML = `
+                        <div class="cook-mode-step-counter">Step ${stepIndex + 1} of ${methodSteps.length}</div>
+                        <p class="cook-mode-step-text">${methodSteps[stepIndex]}</p>
+                    `;
+                    prevBtn.style.display = 'block';
+                    if (stepIndex === methodSteps.length - 1) {
+                        nextBtn.textContent = 'Finish';
+                    } else {
+                        nextBtn.textContent = 'Next Step';
+                    }
+                }
+            }
+
+            function enterCookMode() {
+                if (methodSteps.length === 0) {
+                    alert("This recipe has no method steps to follow.");
+                    return;
+                }
+                document.body.classList.add('cook-mode-active');
+                overlay.style.display = 'flex';
+                requestWakeLock();
+                showStep(-1); // Start with ingredients
+            }
+
+            function exitCookMode() {
+                document.body.classList.remove('cook-mode-active');
+                overlay.style.display = 'none';
+                if (wakeLock !== null) {
+                    wakeLock.release().then(() => {
+                        wakeLock = null;
+                        console.log('Screen Wake Lock released.');
+                    });
+                }
+                currentStep = -1; // Reset
+            }
+
+            if (cookModeBtn) {
+                cookModeBtn.addEventListener('click', enterCookMode);
+            }
+            exitBtn.addEventListener('click', exitCookMode);
+
+            nextBtn.addEventListener('click', () => {
+                if (currentStep < methodSteps.length - 1) {
+                    showStep(currentStep + 1);
+                } else {
+                    exitCookMode(); // Finish button was clicked
+                }
+            });
+
+            prevBtn.addEventListener('click', () => {
+                if (currentStep > -1) { // Can go back to ingredients list
+                    showStep(currentStep - 1);
+                }
+            });
+
+            // Handle visibility change to re-acquire wake lock if needed
+            document.addEventListener('visibilitychange', async () => {
+                if (wakeLock !== null && document.visibilityState === 'visible') {
+                    await requestWakeLock();
+                }
+            });
+        });
+    </script>
 </body>
 </html>

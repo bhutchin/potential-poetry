@@ -344,6 +344,8 @@ func main() {
 	r.HandleFunc("/meal-plan/load/{id:[0-9]+}", logRequest(loadMealPlanHandler)).Methods("GET")
 	r.HandleFunc("/meal-plan/delete/{id:[0-9]+}", logRequest(deleteMealPlanHandler)).Methods("POST")
 	r.HandleFunc("/meal-plan/set-units", logRequest(setUnitSystemHandler)).Methods("GET")
+	// New API endpoint for AJAX updates
+	r.HandleFunc("/meal-plan/api/update", logRequest(updateShoppingListAPIHandler)).Methods("POST")
 
 	certFile := "certs/cert.pem"
 	keyFile := "certs/key.pem"
@@ -554,7 +556,13 @@ func updateRecipeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := db.UpdateRecipe(id, title, sourceURL, ingredients, method, tags); err != nil {
+	servingsStr := r.PostFormValue("servings")
+	servings, err := strconv.Atoi(servingsStr)
+	if err != nil || servings <= 0 {
+		servings = 4 // A safe default if parsing fails or value is invalid
+	}
+
+	if err := db.UpdateRecipe(id, title, sourceURL, servings, ingredients, method, tags); err != nil {
 		log.Printf("Error updating recipe %d: %v", id, err)
 		http.Error(w, "Failed to update recipe", http.StatusInternalServerError)
 		return
@@ -699,10 +707,8 @@ func viewRecipesHandler(w http.ResponseWriter, r *http.Request) {
 // mealPlanHandler acts as a router, delegating to specific handlers based on the HTTP method.
 func mealPlanHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet:
+	case http.MethodGet: // POST is now handled by the API endpoint
 		handleViewMealPlan(w, r)
-	case http.MethodPost:
-		handleUpdateMealPlan(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -910,6 +916,48 @@ func loadMealPlanHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/meal-plan?loaded=true", http.StatusSeeOther)
 }
 
+// updateShoppingListAPIHandler handles AJAX requests to update the shopping list.
+func updateShoppingListAPIHandler(w http.ResponseWriter, r *http.Request) {
+	var cookieData MealPlanCookieData
+	if err := json.NewDecoder(r.Body).Decode(&cookieData); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Update the cookie in the user's browser for persistence.
+	if err := setMealPlanCookie(w, &cookieData); err != nil {
+		log.Printf("Error setting meal plan cookie during API update: %v", err)
+		http.Error(w, "Failed to save meal plan state", http.StatusInternalServerError)
+		return
+	}
+
+	unitSystemCookie, err := r.Cookie(unitSystemCookieName)
+	unitSystem := "imperial"
+	if err == nil {
+		unitSystem = unitSystemCookie.Value
+	}
+
+	shoppingList, err := consolidateIngredients(cookieData.Counts, unitSystem)
+	if err != nil {
+		log.Printf("Error consolidating ingredients for API update: %v", err)
+		http.Error(w, "Failed to generate shopping list", http.StatusInternalServerError)
+		return
+	}
+
+	totalMealCount := 0
+	for _, count := range cookieData.Counts {
+		totalMealCount += count
+	}
+
+	type apiResponse struct {
+		ShoppingList   []db.Ingredient `json:"shoppingList"`
+		TotalMealCount int             `json:"totalMealCount"`
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(apiResponse{ShoppingList: shoppingList, TotalMealCount: totalMealCount})
+}
+
 // handleUpdateMealPlan handles POST requests to update the meal plan cookie.
 func handleUpdateMealPlan(w http.ResponseWriter, r *http.Request) {
 	cookieData, err := parseMealPlanForm(r)
@@ -1104,7 +1152,7 @@ func handleImportHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save the parsed recipe to the database.
-	newRecipeID, err := db.SaveRecipe(recipe.Title, recipe.SourceURL.String, recipe.Ingredients, recipe.Method, tags)
+	newRecipeID, err := db.SaveRecipe(recipe.Title, recipe.SourceURL.String, recipe.Servings, recipe.Ingredients, recipe.Method, tags)
 	if err != nil {
 		log.Printf("Error saving imported recipe to database: %v", err)
 		renderTemplate(w, "web/import_recipe.html", ImportPageData{
@@ -1139,6 +1187,7 @@ func convertJSONLDToRecipe(ld JSONLDRecipe) *db.Recipe {
 	recipe := &db.Recipe{
 		Title:     ld.Name,
 		SourceURL: sql.NullString{String: ld.URL, Valid: ld.URL != ""},
+		Servings:  4, // Set a default serving size for imported recipes
 	}
 
 	for _, ing := range ld.RecipeIngredient {
@@ -1257,7 +1306,7 @@ func handleParseRecipe(w http.ResponseWriter, r *http.Request) {
 You are a culinary assistant. Your task is to parse a recipe from the provided HTML content and return it as a structured JSON object.
 Find the main recipe content within the HTML and ignore ads, comments, and other irrelevant parts.
 
-The JSON object must have the following fields: "title" (string), "sourceURL" (string, if found), "ingredients" (array of objects), "method" (array of strings), and "tags" (array of strings).
+The JSON object must have the following fields: "title" (string), "sourceURL" (string, if found), "servings" (integer, if found), "ingredients" (array of objects), "method" (array of strings), and "tags" (array of strings).
 - "ingredients" objects must have "name" (string), "amount" (string), and "unit" (string).
 - "method" should be an array of strings, with each string being a single step.
 - "tags" should be an array of relevant lowercase strings.
@@ -1272,7 +1321,7 @@ Here is the HTML content:
 		prompt = `
 You are a culinary assistant. Your task is to parse unstructured recipe text and return it as a structured JSON object.
 
-The JSON object must have the following fields: "title" (string), "sourceURL" (string, if found), "ingredients" (array of objects), "method" (array of strings), and "tags" (array of strings).
+The JSON object must have the following fields: "title" (string), "sourceURL" (string, if found), "servings" (integer, if found), "ingredients" (array of objects), "method" (array of strings), and "tags" (array of strings).
 - "ingredients" objects must have "name" (string), "amount" (string), and "unit" (string).
 - "method" should be an array of strings, with each string being a single step.
 - "tags" should be an array of relevant lowercase strings.
@@ -1341,6 +1390,7 @@ Here is the recipe text:
 	var parsedRecipe struct {
 		Title       string           `json:"title"`
 		SourceURL   string           `json:"sourceURL"`
+		Servings    int              `json:"servings"`
 		Ingredients []db.Ingredient  `json:"ingredients"`
 		Method      []string         `json:"method"`
 		Tags        []string         `json:"tags"`
@@ -1361,6 +1411,7 @@ Here is the recipe text:
 	recipeForForm := &db.Recipe{
 		Title:     parsedRecipe.Title,
 		SourceURL: sql.NullString{String: finalSourceURL, Valid: finalSourceURL != ""},
+		Servings:  parsedRecipe.Servings,
 		Ingredients: parsedRecipe.Ingredients,
 	}
 	for i, stepDesc := range parsedRecipe.Method {
@@ -1780,9 +1831,15 @@ func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	servingsStr := r.PostFormValue("servings")
+	servings, err := strconv.Atoi(servingsStr)
+	if err != nil || servings <= 0 {
+		servings = 4 // A safe default if parsing fails or value is invalid
+	}
+
 	sourceURL := r.PostFormValue("sourceURL")
 	// Save the parsed ingredients to the database.
-	recipeID, err := db.SaveRecipe(title, sourceURL, ingredients, method, tags)
+	recipeID, err := db.SaveRecipe(title, sourceURL, servings, ingredients, method, tags)
 	if err != nil {
 		log.Printf("Error saving recipe to database: %v", err)
 		http.Error(w, "Failed to save recipe", http.StatusInternalServerError)

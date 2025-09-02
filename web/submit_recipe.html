@@ -35,6 +35,11 @@
             </div>
 
             <div class="form-group">
+                <label for="servings">Servings</label>
+                <input type="number" id="servings" name="servings" placeholder="e.g., 4" value="{{if .Recipe.Servings}}{{.Recipe.Servings}}{{else}}4{{end}}" min="1" required>
+            </div>
+
+            <div class="form-group">
                 <label for="recipeTags">Tags (comma-separated)</label>
                 <input type="text" id="recipeTags" name="tags" placeholder="e.g., dessert, baking, vegan" value="{{.Recipe.TagsToString}}">
             </div>
