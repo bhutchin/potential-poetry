@@ -3,6 +3,7 @@
 CREATE TABLE IF NOT EXISTS recipes (
     id SERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
+    source_url TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -10,8 +11,8 @@ CREATE TABLE IF NOT EXISTS ingredients (
     id SERIAL PRIMARY KEY,
     recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
-    amount NUMERIC NOT NULL,
-    measurement VARCHAR(50) NOT NULL
+    amount VARCHAR(50) NOT NULL,
+    unit VARCHAR(50) NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS method_steps (
@@ -32,4 +33,12 @@ CREATE TABLE IF NOT EXISTS recipe_categories (
     recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
     category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
     PRIMARY KEY (recipe_id, category_id)
+);
+
+-- Table for saved meal plans
+CREATE TABLE IF NOT EXISTS meal_plans (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) UNIQUE NOT NULL,
+    data JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

@@ -26,8 +26,8 @@
         {{end}}
 
         <form action="/meal-plan" method="post" class="meal-plan-form">
-
-            <h3 class="section-title">Select Meals</h3>
+            <section aria-labelledby="select-meals-title">
+            <h3 id="select-meals-title" class="section-title">Select Meals</h3>
             <p>Set the quantity for each recipe you want in your meal plan. Set to 0 to remove.</p>
             <div class="meal-plan-search-container">
                 <input type="text" id="recipe-search-input" placeholder="Search for a recipe to add...">
@@ -56,11 +56,12 @@
                 {{end}}
                 <a href="/meal-plan?action=clear" class="clear-button">Clear Plan</a>
             </div>
+            </section>
         </form>
 
         {{if .ShoppingList}}
-        <h3 class="section-title">Weekly Meal Plan</h3>
-        <div class="meal-plan-week">
+        <section aria-labelledby="weekly-plan-title">
+        <h3 id="weekly-plan-title" class="section-title">Weekly Meal Plan {{if gt .TotalMealCount 0}}<span class="title-meta">({{ .TotalMealCount }} {{if eq .TotalMealCount 1}}meal{{else}}meals{{end}} total)</span>{{end}}</h3>        <div class="meal-plan-week">
             <div class="meal-plan-day">
                 <h4>Sunday</h4>
                 <div class="day-drop-zone"></div>
@@ -90,8 +91,17 @@
                 <div class="day-drop-zone"></div>
             </div>
         </div>
+        </section>
 
-        <h3 class="section-title">Consolidated Shopping List</h3>
+        <section aria-labelledby="shopping-list-title">
+        <h3 id="shopping-list-title" class="section-title">Consolidated Shopping List</h3>
+        <!-- Unit system controls -->
+        <div class="list-controls">
+            <span>Units:</span>
+            <a href="/meal-plan/set-units?system=imperial" class="sort-link {{if eq .UnitSystem "imperial"}}active{{end}}">Imperial</a>
+            <a href="/meal-plan/set-units?system=metric" class="sort-link {{if eq .UnitSystem "metric"}}active{{end}}">Metric</a>
+        </div>
+
         <table class="shopping-list-table">
             <thead>
                 <tr>
@@ -110,10 +120,11 @@
                 {{end}}
             </tbody>
         </table>
+        </section>
         {{end}}
 
-        <h3 class="section-title">Saved Meal Plans</h3>
-
+        <section aria-labelledby="saved-plans-title">
+        <h3 id="saved-plans-title" class="section-title">Saved Meal Plans</h3>
         <!-- Sorting controls -->
         <div class="list-controls">
             <span>Sort by:</span>
@@ -164,6 +175,7 @@
             {{end}}
         </div>
         {{end}}
+        </section>
     </div>
     <div class="page-footer-nav">
         <a href="/recipes" class="nav-button home">Back to All Recipes</a>
@@ -180,19 +192,29 @@
             function createMealCard(recipeId, title, quantity) {
                 const card = document.createElement('div');
                 card.className = 'meal-card-planner';
+                card.tabIndex = 0; // Make the card focusable
                 card.draggable = true;
                 card.dataset.recipeId = recipeId;
                 card.innerHTML = `
                     <div class="meal-card-info">
-                        <span class="drag-handle">
+                        <span class="drag-handle" aria-hidden="true">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M7 2a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zM7 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zM7 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/></svg>
                         </span>
                         <span class="meal-card-title">${title}</span>
                     </div>
                     <span class="meal-card-quantity">x${quantity}</span>
+                    <div class="meal-card-actions">
+                        <button type="button" class="move-button move-up" aria-label="Move ${title} up">▲</button>
+                        <button type="button" class="move-button move-down" aria-label="Move ${title} down">▼</button>
+                    </div>
                 `;
                 card.addEventListener('dragstart', handleDragStart);
                 card.addEventListener('dragend', handleDragEnd);
+
+                // Add event listener for the move buttons
+                const actions = card.querySelector('.meal-card-actions');
+                actions.addEventListener('click', handleMoveButtonClick);
+
                 return card;
             }
 
@@ -245,6 +267,30 @@
                     draggedItem.classList.remove('dragging');
                 }
                 draggedItem = null;
+            }
+
+            function handleMoveButtonClick(e) {
+                const button = e.target.closest('.move-button');
+                if (!button) return;
+
+                const card = button.closest('.meal-card-planner');
+                if (!card) return;
+
+                const container = card.parentElement;
+
+                if (button.classList.contains('move-up')) {
+                    const previous = card.previousElementSibling;
+                    if (previous) {
+                        container.insertBefore(card, previous);
+                        button.focus(); // Keep focus on the button after move
+                    }
+                } else if (button.classList.contains('move-down')) {
+                    const next = card.nextElementSibling;
+                    if (next) {
+                        container.insertBefore(next, card); // Insert the next sibling before the current card
+                        button.focus(); // Keep focus on the button after move
+                    }
+                }
             }
 
             // --- Search/Filter for Recipe Selection ---
@@ -314,11 +360,9 @@
                 zone.addEventListener('drop', e => {
                     e.preventDefault();
                     zone.classList.remove('drag-over');
-                    if (draggedItem && draggedItem.parentElement !== zone) {
-                        if (zone.children.length > 0) {
-                            const existingItem = zone.firstElementChild;
-                            draggedItem.parentElement.appendChild(existingItem);
-                        }
+                    // The swap logic is removed to allow multiple items per day.
+                    // The browser automatically handles moving the draggedItem from its old parent.
+                    if (draggedItem) {
                         zone.appendChild(draggedItem);
                     }
                 });

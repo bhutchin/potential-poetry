@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Parse Recipe with AI</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="content-container">
+        <h1>Parse Recipe with AI</h1>
+        <p>Enter a recipe URL to have it scraped and parsed automatically, OR paste the full text of a recipe below.</p>
+
+        {{if .Error}}
+        <div class="alert alert-danger">
+            <strong>Error:</strong> {{.Error}}
+        </div>
+        {{end}}
+
+        <form action="/handle-parse" method="post">
+            <div class="form-group">
+                <label for="recipeURL">Recipe URL</label>
+                <input type="url" id="recipeURL" name="recipeURL" class="search-input" placeholder="https://example.com/your-favorite-recipe" value="{{.RecipeURL}}">
+            </div>
+
+            <div class="form-group-separator">
+                <span>OR</span>
+            </div>
+
+            <div class="form-group">
+                <label for="recipeText">Recipe Text</label>
+                <textarea id="recipeText" name="recipeText" class="json-input" rows="15" placeholder="Paste your full recipe text here...">{{.RecipeText}}</textarea>
+            </div>
+            <div class="form-actions" style="justify-content: flex-start;">
+                <input type="submit" class="submit-button" value="Parse Recipe">
+            </div>
+        </form>
+
+    </div>
+
+    <div class="page-footer-nav">
+        <a href="/recipes" class="nav-button home">Cancel</a>
+    </div>
+</body>
+</html>

@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"io"
+	"bytes"
 	"github.com/gorilla/mux"
 )
 
@@ -61,7 +63,16 @@ type ImportPageData struct {
 	JSONData string // To re-populate the textarea on error
 }
 
+// ParsePageData holds data for the AI recipe parsing page.
+type ParsePageData struct {
+	Error      string
+	RecipeText string // To re-populate the textarea on error
+	RecipeURL  string // To re-populate the URL field on error
+}
+
 const mealPlanCookieName = "meal-plan-recipes"
+const unitSystemCookieName = "unit-system"
+const recipesPerPage = 20
 
 // allUnits is a list of all known measurement units, sorted by length descending.
 // This is used for parsing ingredient strings. It is populated at startup.
@@ -147,6 +158,24 @@ var orderedWeightUnits = []struct {
 	Value float64 // Value in the base unit (grams)
 }{
 	{"kg", 1000}, {"pound", 453.592}, {"ounce", 28.3495}, {"gram", 1},
+}
+
+// orderedMetricVolumeUnits provides a hierarchy for formatting consolidated metric volume amounts.
+var orderedMetricVolumeUnits = []struct {
+	Name  string
+	Value float64 // Value in base unit (teaspoons)
+}{
+	{"liter", 202.884},
+	{"ml", 0.202884},
+}
+
+// orderedMetricWeightUnits provides a hierarchy for formatting consolidated metric weight amounts.
+var orderedMetricWeightUnits = []struct {
+	Name  string
+	Value float64 // Value in base unit (grams)
+}{
+	{"kg", 1000},
+	{"g", 1},
 }
 
 // JSONLDInstruction represents a step in a recipe's method, supporting multiple JSON-LD formats.
@@ -237,6 +266,46 @@ type JSONLDRecipe struct {
 	Keywords           string              `json:"keywords"`
 }
 
+// --- Gemini API Structs ---
+
+// GeminiRequestPart defines a part of the content for the Gemini API request.
+type GeminiRequestPart struct {
+	Text string `json:"text"`
+}
+
+// GeminiRequestContent defines the content for the Gemini API request.
+type GeminiRequestContent struct {
+	Parts []GeminiRequestPart `json:"parts"`
+}
+
+// GeminiRequest is the top-level structure for a request to the Gemini API.
+type GeminiRequest struct {
+	Contents []GeminiRequestContent `json:"contents"`
+}
+
+// GeminiResponsePart defines a part of the content in the Gemini API response.
+type GeminiResponsePart struct {
+	Text string `json:"text"`
+}
+
+// GeminiResponseContent defines the content in the Gemini API response.
+type GeminiResponseContent struct {
+	Parts []GeminiResponsePart `json:"parts"`
+	Role  string               `json:"role"`
+}
+
+// GeminiCandidate holds a single response candidate from the Gemini API.
+type GeminiCandidate struct {
+	Content GeminiResponseContent `json:"content"`
+}
+
+// GeminiResponse is the top-level structure for a response from the Gemini API.
+type GeminiResponse struct {
+	Candidates []GeminiCandidate `json:"candidates"`
+}
+
+// --- End Gemini API Structs ---
+
 func main() {
 	// Initialize the database connection.
 	err := db.InitDB()
@@ -256,6 +325,8 @@ func main() {
 	r.HandleFunc("/new_page", logRequest(genericFileHandler("new_page.html"))).Methods("GET")
 	r.HandleFunc("/submit_recipe", logRequest(submitRecipePageHandler)).Methods("GET")
 	r.HandleFunc("/import-recipe", logRequest(importRecipePageHandler)).Methods("GET")
+	r.HandleFunc("/parse-recipe", logRequest(parseRecipePageHandler)).Methods("GET")
+	r.HandleFunc("/handle-parse", logRequest(handleParseRecipe)).Methods("POST")
 	r.HandleFunc("/handle-import", logRequest(handleImportHandler)).Methods("POST")
 	r.HandleFunc("/recipes", logRequest(viewRecipesHandler)).Methods("GET")
 	r.HandleFunc("/submit_ingredients", logRequest(submitIngredientsHandler)).Methods("POST")
@@ -272,6 +343,7 @@ func main() {
 	r.HandleFunc("/meal-plan/save", logRequest(saveMealPlanHandler)).Methods("POST")
 	r.HandleFunc("/meal-plan/load/{id:[0-9]+}", logRequest(loadMealPlanHandler)).Methods("GET")
 	r.HandleFunc("/meal-plan/delete/{id:[0-9]+}", logRequest(deleteMealPlanHandler)).Methods("POST")
+	r.HandleFunc("/meal-plan/set-units", logRequest(setUnitSystemHandler)).Methods("GET")
 
 	certFile := "certs/cert.pem"
 	keyFile := "certs/key.pem"
@@ -288,11 +360,31 @@ func main() {
 	}
 }
 
+func setUnitSystemHandler(w http.ResponseWriter, r *http.Request) {
+	system := r.URL.Query().Get("system")
+	if system != "metric" && system != "imperial" {
+		system = "imperial" // A safe default
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     unitSystemCookieName,
+		Value:    system,
+		Path:     "/",
+		Expires:  time.Now().Add(365 * 24 * time.Hour), // Expires in 1 year
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   true,
+	})
+
+	// Redirect back to the meal planner page. The browser will include the new cookie
+	// in the subsequent GET request.
+	http.Redirect(w, r, "/meal-plan", http.StatusSeeOther)
+}
+
 func recipesByTagHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tag := vars["tag"]
 
-	const recipesPerPage = 5
 	pageStr := r.URL.Query().Get("page")
 	page, err := strconv.Atoi(pageStr)
 	if err != nil || page < 1 {
@@ -458,7 +550,7 @@ func updateRecipeHandler(w http.ResponseWriter, r *http.Request) {
 	if tagsStr != "" {
 		tags = strings.Split(tagsStr, ",")
 		for i := range tags {
-			tags[i] = strings.TrimSpace(tags[i])
+			tags[i] = strings.ToLower(strings.TrimSpace(tags[i]))
 		}
 	}
 
@@ -574,7 +666,6 @@ func viewRecipesHandler(w http.ResponseWriter, r *http.Request) {
 	// Get the search query from the URL, e.g., /recipes?q=chicken
 	searchQuery := r.URL.Query().Get("q")
 
-	const recipesPerPage = 5
 	pageStr := r.URL.Query().Get("page")
 	page, err := strconv.Atoi(pageStr)
 	if err != nil || page < 1 {
@@ -642,9 +733,22 @@ func handleViewMealPlan(w http.ResponseWriter, r *http.Request) {
 		mealOrder = cookieData.Order
 	}
 
+	// Calculate total meal count
+	totalMealCount := 0
+	for _, count := range recipeCounts {
+		totalMealCount += count
+	}
+
+	// Get user's preferred unit system from cookie, default to imperial
+	unitSystemCookie, err := r.Cookie(unitSystemCookieName)
+	unitSystem := "imperial"
+	if err == nil {
+		unitSystem = unitSystemCookie.Value
+	}
+
 	var shoppingList []db.Ingredient
 	if len(recipeCounts) > 0 {
-		shoppingList, err = consolidateIngredients(recipeCounts)
+		shoppingList, err = consolidateIngredients(recipeCounts, unitSystem)
 		if err != nil {
 			log.Printf("Error consolidating ingredients: %v", err)
 			http.Error(w, "Failed to generate shopping list", http.StatusInternalServerError)
@@ -691,6 +795,8 @@ func handleViewMealPlan(w http.ResponseWriter, r *http.Request) {
 	data := struct {
 		MealPlanPageData
 		URL              *url.URL
+		TotalMealCount   int
+		UnitSystem       string
 		SortOrder        string
 		PlansCurrentPage int
 		PlansTotalPages  int
@@ -701,7 +807,7 @@ func handleViewMealPlan(w http.ResponseWriter, r *http.Request) {
 	}{
 		MealPlanPageData: MealPlanPageData{
 			AllRecipes: allRecipes, RecipeCounts: recipeCounts, ShoppingList: shoppingList, MealOrder: mealOrder, SavedPlans: savedPlans,
-		},
+		}, UnitSystem: unitSystem, TotalMealCount: totalMealCount,
 		URL: r.URL, SortOrder: sortOrder, PlansCurrentPage: page, PlansTotalPages: totalPages, PlansHasNext: page < totalPages, PlansHasPrev: page > 1, PlansNextPage: page + 1, PlansPrevPage: page - 1,
 	}
 	renderMealPlanTemplate(w, data)
@@ -720,10 +826,16 @@ func printShoppingListHandler(w http.ResponseWriter, r *http.Request) {
 		recipeCounts = cookieData.Counts
 	}
 
+	unitSystemCookie, err := r.Cookie(unitSystemCookieName)
+	unitSystem := "imperial"
+	if err == nil {
+		unitSystem = unitSystemCookie.Value
+	}
+
 	var shoppingList []db.Ingredient
 	if len(recipeCounts) > 0 {
 		var err error
-		shoppingList, err = consolidateIngredients(recipeCounts)
+		shoppingList, err = consolidateIngredients(recipeCounts, unitSystem)
 		if err != nil {
 			log.Printf("Error consolidating ingredients for printing: %v", err)
 			http.Error(w, "Failed to generate shopping list", http.StatusInternalServerError)
@@ -1031,26 +1143,235 @@ func convertJSONLDToRecipe(ld JSONLDRecipe) *db.Recipe {
 
 	for _, ing := range ld.RecipeIngredient {
 		recipe.Ingredients = append(recipe.Ingredients, db.Ingredient{
-			Name:   ing.Name,
+			Name:   strings.Title(strings.ToLower(strings.TrimSpace(ing.Name))),
 			Amount: ing.Amount,
-			Unit:   ing.Unit,
+			Unit:   strings.ToLower(strings.TrimSpace(ing.Unit)),
 		})
 	}
 
 	for i, inst := range ld.RecipeInstructions {
 		recipe.Method = append(recipe.Method, db.MethodStep{
 			StepNumber:  i + 1,
-			Description: inst.Text,
+			Description: strings.TrimSpace(inst.Text),
 		})
 	}
 
 	if ld.Keywords != "" {
 		tags := strings.Split(ld.Keywords, ",")
 		for _, tag := range tags {
-			recipe.Categories = append(recipe.Categories, db.Category{Name: strings.TrimSpace(tag)})
+			recipe.Categories = append(recipe.Categories, db.Category{Name: strings.ToLower(strings.TrimSpace(tag))})
 		}
 	}
 	return recipe
+}
+
+// fetchURLContent makes a GET request to a URL and returns its body as a string.
+func fetchURLContent(urlStr string) (string, error) {
+	// Basic validation
+	_, err := url.ParseRequestURI(urlStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL format")
+	}
+
+	client := &http.Client{
+		Timeout: 15 * time.Second, // Set a reasonable timeout
+	}
+
+	req, err := http.NewRequest("GET", urlStr, nil)
+	if err != nil {
+		return "", fmt.Errorf("could not create request: %w", err)
+	}
+	// Set a user-agent to mimic a browser, as some sites block default Go user-agents.
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("received non-200 status code: %s", resp.Status)
+	}
+
+	// Limit the size of the body to prevent processing excessively large files.
+	limitedReader := &io.LimitedReader{R: resp.Body, N: 2 * 1024 * 1024} // 2MB limit
+
+	body, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return string(body), nil
+}
+
+// parseRecipePageHandler serves the page where users can paste recipe text for AI parsing.
+func parseRecipePageHandler(w http.ResponseWriter, r *http.Request) {
+	renderTemplate(w, "web/parse_recipe.html", ParsePageData{})
+}
+
+// handleParseRecipe takes raw text, sends it to the Gemini API, and pre-populates the recipe form.
+func handleParseRecipe(w http.ResponseWriter, r *http.Request) {
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" || apiKey == "your_gemini_api_key_here" {
+		log.Println("GEMINI_API_KEY is not set.")
+		renderTemplate(w, "web/parse_recipe.html", ParsePageData{
+			Error: "AI parsing is not configured on the server. Please set the GEMINI_API_KEY.",
+		})
+		return
+	}
+
+	recipeURL := r.PostFormValue("recipeURL")
+	recipeText := r.PostFormValue("recipeText")
+	var textToParse string
+	var err error
+
+	// This struct will be used to re-populate the form if any error occurs.
+	pageDataOnError := ParsePageData{
+		RecipeURL:  recipeURL,
+		RecipeText: recipeText,
+	}
+
+	if recipeURL != "" {
+		// User provided a URL, fetch its content.
+		log.Printf("Parsing recipe from URL: %s", recipeURL)
+		textToParse, err = fetchURLContent(recipeURL)
+		if err != nil {
+			log.Printf("Error fetching URL content: %v", err)
+			pageDataOnError.Error = fmt.Sprintf("Failed to fetch content from URL: %v", err)
+			renderTemplate(w, "web/parse_recipe.html", pageDataOnError)
+			return
+		}
+	} else if recipeText != "" {
+		// User provided raw text.
+		textToParse = recipeText
+	} else {
+		pageDataOnError.Error = "Please provide a URL or paste recipe text."
+		renderTemplate(w, "web/parse_recipe.html", pageDataOnError)
+		return
+	}
+
+	var prompt string
+	if recipeURL != "" {
+		prompt = `
+You are a culinary assistant. Your task is to parse a recipe from the provided HTML content and return it as a structured JSON object.
+Find the main recipe content within the HTML and ignore ads, comments, and other irrelevant parts.
+
+The JSON object must have the following fields: "title" (string), "sourceURL" (string, if found), "ingredients" (array of objects), "method" (array of strings), and "tags" (array of strings).
+- "ingredients" objects must have "name" (string), "amount" (string), and "unit" (string).
+- "method" should be an array of strings, with each string being a single step.
+- "tags" should be an array of relevant lowercase strings.
+
+Do not include any explanations, markdown formatting, or introductory text. Only output the raw JSON object.
+
+Here is the HTML content:
+---
+` + textToParse + `
+---`
+	} else {
+		prompt = `
+You are a culinary assistant. Your task is to parse unstructured recipe text and return it as a structured JSON object.
+
+The JSON object must have the following fields: "title" (string), "sourceURL" (string, if found), "ingredients" (array of objects), "method" (array of strings), and "tags" (array of strings).
+- "ingredients" objects must have "name" (string), "amount" (string), and "unit" (string).
+- "method" should be an array of strings, with each string being a single step.
+- "tags" should be an array of relevant lowercase strings.
+
+Do not include any explanations, markdown formatting, or introductory text. Only output the raw JSON object.
+
+Here is the recipe text:
+---
+` + textToParse + `
+---`
+	}
+
+	// Prepare the request to the Gemini API
+	geminiReqBody := GeminiRequest{
+		Contents: []GeminiRequestContent{
+			{Parts: []GeminiRequestPart{{Text: prompt}}},
+		},
+	}
+	reqBytes, err := json.Marshal(geminiReqBody)
+	if err != nil {
+		log.Printf("Error marshalling Gemini request: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Make the API call
+	url := "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=" + apiKey
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(reqBytes))
+	if err != nil {
+		log.Printf("Error calling Gemini API: %v", err)
+		pageDataOnError.Error = "Failed to communicate with AI service."
+		renderTemplate(w, "web/parse_recipe.html", pageDataOnError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Gemini API returned non-200 status: %s", resp.Status)
+		pageDataOnError.Error = "AI service returned an error."
+		renderTemplate(w, "web/parse_recipe.html", pageDataOnError)
+		return
+	}
+
+	// Decode the response
+	var geminiResp GeminiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
+		pageDataOnError.Error = "Failed to parse AI response."
+		renderTemplate(w, "web/parse_recipe.html", pageDataOnError)
+		return
+	}
+
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		pageDataOnError.Error = "AI returned an empty response."
+		renderTemplate(w, "web/parse_recipe.html", pageDataOnError)
+		return
+	}
+
+	// The actual JSON content is a string within the response.
+	// It's often wrapped in markdown backticks, which we need to remove before parsing.
+	parsedContentJSON := geminiResp.Candidates[0].Content.Parts[0].Text
+	parsedContentJSON = strings.TrimPrefix(parsedContentJSON, "```json")
+	parsedContentJSON = strings.TrimPrefix(parsedContentJSON, "```")
+	parsedContentJSON = strings.TrimSuffix(parsedContentJSON, "```")
+	parsedContentJSON = strings.TrimSpace(parsedContentJSON)
+
+	var parsedRecipe struct {
+		Title       string           `json:"title"`
+		SourceURL   string           `json:"sourceURL"`
+		Ingredients []db.Ingredient  `json:"ingredients"`
+		Method      []string         `json:"method"`
+		Tags        []string         `json:"tags"`
+	}
+	if err := json.Unmarshal([]byte(parsedContentJSON), &parsedRecipe); err != nil {
+		log.Printf("Error unmarshalling parsed recipe JSON from Gemini: %v", err)
+		pageDataOnError.Error = "AI returned data in an unexpected format. Please try again."
+		renderTemplate(w, "web/parse_recipe.html", pageDataOnError)
+		return
+	}
+
+	// Prioritize the user-entered URL as the source.
+	finalSourceURL := parsedRecipe.SourceURL
+	if recipeURL != "" {
+		finalSourceURL = recipeURL
+	}
+	// Convert the parsed data into our db.Recipe struct to pre-populate the form.
+	recipeForForm := &db.Recipe{
+		Title:     parsedRecipe.Title,
+		SourceURL: sql.NullString{String: finalSourceURL, Valid: finalSourceURL != ""},
+		Ingredients: parsedRecipe.Ingredients,
+	}
+	for i, stepDesc := range parsedRecipe.Method {
+		recipeForForm.Method = append(recipeForForm.Method, db.MethodStep{StepNumber: i + 1, Description: stepDesc})
+	}
+	for _, tagName := range parsedRecipe.Tags {
+		recipeForForm.Categories = append(recipeForForm.Categories, db.Category{Name: tagName})
+	}
+
+	// Render the submission form with the pre-populated data.
+	renderTemplate(w, "web/submit_recipe.html", SubmitPageData{Recipe: recipeForForm})
 }
 
 // normalizeAmount converts a string amount (potentially a fraction) into a clean float string.
@@ -1159,17 +1480,131 @@ func renderMealPlanTemplate(w http.ResponseWriter, data interface{}) {
 	}
 }
 
-// consolidateIngredients fetches ingredients for selected recipes and consolidates them.
-func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
-	// map[IngredientName]TotalInBaseUnit (teaspoons)
-	consolidatedConvertible := make(map[string]float64)
-	// map[IngredientName]TotalInBaseUnit (grams)
-	consolidatedWeightConvertible := make(map[string]float64)
-	// For units we can't convert, but amounts are numeric (e.g. "2 cloves")
+// ingredientAggregator holds the consolidated data for a shopping list.
+type ingredientAggregator struct {
+	// volumes holds ingredients convertible to a base volume unit (teaspoons).
+	// map[IngredientName]TotalInBaseUnit
+	volumes map[string]float64
+	// weights holds ingredients convertible to a base weight unit (grams).
+	// map[IngredientName]TotalInBaseUnit
+	weights map[string]float64
+	// others holds ingredients with numeric amounts but non-convertible units (e.g., "2 cloves").
 	// map[IngredientName]map[Unit]Amount
-	consolidatedOther := make(map[string]map[string]float64)
-	// For ingredients where amount is not a number (e.g. "a pinch")
-	var nonNumericShoppingList []db.Ingredient
+	others map[string]map[string]float64
+	// nonNumeric holds ingredients with non-numeric amounts (e.g., "a pinch").
+	nonNumeric []db.Ingredient
+}
+
+// newIngredientAggregator creates and initializes an ingredientAggregator.
+func newIngredientAggregator() *ingredientAggregator {
+	return &ingredientAggregator{
+		volumes:    make(map[string]float64),
+		weights:    make(map[string]float64),
+		others:     make(map[string]map[string]float64),
+		nonNumeric: []db.Ingredient{},
+	}
+}
+
+// add processes a single ingredient and adds it to the appropriate category in the aggregator.
+func (a *ingredientAggregator) add(ing db.Ingredient, multiplier int) {
+	name := strings.ToLower(strings.TrimSpace(ing.Name))
+	unit := strings.ToLower(strings.TrimSpace(ing.Unit))
+
+	amount, err := strconv.ParseFloat(ing.Amount, 64)
+	if err != nil {
+		// Amount is not a number (e.g., "a pinch", "to taste").
+		// Add it to the list for each instance in the plan.
+		for i := 0; i < multiplier; i++ {
+			a.nonNumeric = append(a.nonNumeric, ing)
+		}
+		return
+	}
+
+	totalAmount := amount * float64(multiplier)
+
+	// Check for convertible volume units.
+	if factor, ok := unitConversions[unit]; ok {
+		a.volumes[name] += totalAmount * factor
+		return
+	}
+
+	// Check for convertible weight units.
+	if factor, ok := weightConversions[unit]; ok {
+		a.weights[name] += totalAmount * factor
+		return
+	}
+
+	// Handle other numeric units (e.g., "cloves", "slices").
+	if _, ok := a.others[name]; !ok {
+		a.others[name] = make(map[string]float64)
+	}
+	a.others[name][ing.Unit] += totalAmount
+}
+
+// buildShoppingList compiles the aggregated data into a final, sorted shopping list.
+func (a *ingredientAggregator) buildShoppingList(unitSystem string) []db.Ingredient {
+	var shoppingList []db.Ingredient
+
+	// Process convertible volume ingredients.
+	for name, totalTeaspoons := range a.volumes {
+		var amountStr, unitStr string
+		if unitSystem == "metric" {
+			amountStr, unitStr = formatAmountMetric(totalTeaspoons)
+		} else {
+			amountStr, unitStr = formatAmount(totalTeaspoons)
+		}
+
+		shoppingList = append(shoppingList, db.Ingredient{
+			Name:   strings.Title(name),
+			Amount: amountStr,
+			Unit:   unitStr,
+		})
+	}
+
+	// Process convertible weight ingredients.
+	for name, totalGrams := range a.weights {
+		var amountStr, unitStr string
+		if unitSystem == "metric" {
+			amountStr, unitStr = formatWeightAmountMetric(totalGrams)
+		} else {
+			amountStr, unitStr = formatWeightAmount(totalGrams)
+		}
+
+		shoppingList = append(shoppingList, db.Ingredient{
+			Name:   strings.Title(name),
+			Amount: amountStr,
+			Unit:   unitStr,
+		})
+	}
+
+	// Process other numeric ingredients.
+	for name, unitMap := range a.others {
+		for unit, amount := range unitMap {
+			shoppingList = append(shoppingList, db.Ingredient{
+				Name:   strings.Title(name),
+				Unit:   unit,
+				Amount: strconv.FormatFloat(amount, 'f', -1, 64),
+			})
+		}
+	}
+
+	// Add the non-numeric ingredients.
+	shoppingList = append(shoppingList, a.nonNumeric...)
+
+	// Sort the final list for consistent display.
+	sort.Slice(shoppingList, func(i, j int) bool {
+		if shoppingList[i].Name != shoppingList[j].Name {
+			return shoppingList[i].Name < shoppingList[j].Name
+		}
+		return shoppingList[i].Unit < shoppingList[j].Unit
+	})
+
+	return shoppingList
+}
+
+// consolidateIngredients fetches ingredients for selected recipes and consolidates them into a shopping list.
+func consolidateIngredients(recipeCounts map[int]int, unitSystem string) ([]db.Ingredient, error) {
+	aggregator := newIngredientAggregator()
 
 	for id, countMultiplier := range recipeCounts {
 		recipe, err := db.FetchRecipeByID(id)
@@ -1182,86 +1617,11 @@ func consolidateIngredients(recipeCounts map[int]int) ([]db.Ingredient, error) {
 		}
 
 		for _, ing := range recipe.Ingredients {
-			name := strings.ToLower(strings.TrimSpace(ing.Name))
-			unit := strings.ToLower(strings.TrimSpace(ing.Unit))
-
-			amount, err := strconv.ParseFloat(ing.Amount, 64)
-			if err != nil {
-				// Amount is not a number, e.g., "a pinch", "to taste".
-				// Add it to the list for each instance in the plan.
-				for i := 0; i < countMultiplier; i++ {
-					nonNumericShoppingList = append(nonNumericShoppingList, ing)
-				}
-				continue
-			}
-
-			volumeConversionFactor, isVolumeConvertible := unitConversions[unit]
-			weightConversionFactor, isWeightConvertible := weightConversions[unit]
-
-			if isVolumeConvertible {
-				// Unit is convertible, add to the base unit total.
-				totalAmountInBaseUnit := amount * float64(countMultiplier) * volumeConversionFactor
-				consolidatedConvertible[name] += totalAmountInBaseUnit
-			} else if isWeightConvertible {
-				// Unit is convertible by weight, add to the base unit total.
-				totalAmountInBaseUnit := amount * float64(countMultiplier) * weightConversionFactor
-				consolidatedWeightConvertible[name] += totalAmountInBaseUnit
-			} else {
-				// Unit is not convertible (e.g., "cloves", "slices"), but amount is numeric.
-				// Consolidate by name and exact unit string.
-				if _, ok := consolidatedOther[name]; !ok {
-					consolidatedOther[name] = make(map[string]float64)
-				}
-				consolidatedOther[name][ing.Unit] += amount * float64(countMultiplier)
-			}
+			aggregator.add(ing, countMultiplier)
 		}
 	}
 
-	var shoppingList []db.Ingredient
-
-	// Process convertible volume ingredients, formatting them to the best unit.
-	for name, totalTeaspoons := range consolidatedConvertible {
-		amountStr, unitStr := formatAmount(totalTeaspoons)
-		shoppingList = append(shoppingList, db.Ingredient{
-			Name:   strings.Title(name),
-			Amount: amountStr,
-			Unit:   unitStr,
-		})
-	}
-
-	// Process convertible weight ingredients, formatting them to the best unit.
-	for name, totalGrams := range consolidatedWeightConvertible {
-		amountStr, unitStr := formatWeightAmount(totalGrams)
-		shoppingList = append(shoppingList, db.Ingredient{
-			Name:   strings.Title(name),
-			Amount: amountStr,
-			Unit:   unitStr,
-		})
-	}
-
-	// Process other numeric ingredients that weren't convertible.
-	for name, unitMap := range consolidatedOther {
-		for unit, amount := range unitMap {
-			shoppingList = append(shoppingList, db.Ingredient{
-				Name:   strings.Title(name), // Capitalize for display
-				Unit:   unit,
-				Amount: strconv.FormatFloat(amount, 'f', -1, 64), // -1 for fewest digits
-			})
-		}
-	}
-
-	// Add the non-numeric ingredients to the final list.
-	shoppingList = append(shoppingList, nonNumericShoppingList...)
-
-	// Sort the final list for consistent display.
-	sort.Slice(shoppingList, func(i, j int) bool {
-		if shoppingList[i].Name != shoppingList[j].Name {
-			return shoppingList[i].Name < shoppingList[j].Name
-		}
-		return shoppingList[i].Unit < shoppingList[j].Unit
-	})
-
-	return shoppingList, nil
+	return aggregator.buildShoppingList(unitSystem), nil
 }
 
 // formatAmount converts a total amount in a base unit (teaspoons) to a human-readable
@@ -1304,6 +1664,29 @@ func formatAmount(totalTeaspoons float64) (string, string) {
 	return strconv.FormatFloat(totalTeaspoons, 'f', -1, 64), "teaspoons"
 }
 
+// formatAmountMetric converts a total amount in a base unit (teaspoons) to a human-readable
+// metric amount and unit (e.g., 203 tsp -> "1", "liter").
+func formatAmountMetric(totalTeaspoons float64) (string, string) {
+	totalML := totalTeaspoons / unitConversions["ml"]
+
+	for _, unit := range orderedMetricVolumeUnits {
+		if totalTeaspoons >= unit.Value {
+			amountInUnit := totalTeaspoons / unit.Value
+
+			// Format to a reasonable number of decimal places, then clean it up.
+			formattedAmount := strconv.FormatFloat(amountInUnit, 'f', 2, 64)
+			formattedAmount = strings.TrimSuffix(formattedAmount, ".00")
+			formattedAmount = strings.TrimSuffix(formattedAmount, ".0")
+
+			return formattedAmount, unit.Name
+		}
+	}
+
+	// Fallback for small amounts (less than 1 ml)
+	formattedAmount := strconv.FormatFloat(totalML, 'f', 2, 64)
+	return formattedAmount, "ml"
+}
+
 // formatWeightAmount converts a total amount in a base unit (grams) to a human-readable
 // amount and unit (e.g., 1200g -> "1.2", "kg").
 func formatWeightAmount(totalGrams float64) (string, string) {
@@ -1329,6 +1712,28 @@ func formatWeightAmount(totalGrams float64) (string, string) {
 
 	// Fallback for values less than the smallest unit in the ordered list (e.g., < 1 gram).
 	formattedAmount := strconv.FormatFloat(totalGrams, 'f', 2, 64)
+	return formattedAmount, "g"
+}
+
+// formatWeightAmountMetric converts a total amount in grams to a human-readable metric amount.
+func formatWeightAmountMetric(totalGrams float64) (string, string) {
+	for _, unit := range orderedMetricWeightUnits {
+		if totalGrams >= unit.Value {
+			amountInUnit := totalGrams / unit.Value
+
+			// Format to a reasonable number of decimal places, then clean it up.
+			formattedAmount := strconv.FormatFloat(amountInUnit, 'f', 2, 64)
+			formattedAmount = strings.TrimSuffix(formattedAmount, ".00")
+			formattedAmount = strings.TrimSuffix(formattedAmount, ".0")
+
+			return formattedAmount, unit.Name
+		}
+	}
+
+	// Fallback for values less than the smallest unit in the ordered list (e.g., < 1 gram).
+	// This will typically be 'g'.
+	formattedAmount := strconv.FormatFloat(totalGrams, 'f', 2, 64)
+	formattedAmount = strings.TrimSuffix(formattedAmount, ".00")
 	return formattedAmount, "g"
 }
 
@@ -1371,12 +1776,13 @@ func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {
 	if tagsStr != "" {
 		tags = strings.Split(tagsStr, ",")
 		for i := range tags {
-			tags[i] = strings.TrimSpace(tags[i])
+			tags[i] = strings.ToLower(strings.TrimSpace(tags[i]))
 		}
 	}
 
+	sourceURL := r.PostFormValue("sourceURL")
 	// Save the parsed ingredients to the database.
-	recipeID, err := db.SaveRecipe(title, "", ingredients, method, tags)
+	recipeID, err := db.SaveRecipe(title, sourceURL, ingredients, method, tags)
 	if err != nil {
 		log.Printf("Error saving recipe to database: %v", err)
 		http.Error(w, "Failed to save recipe", http.StatusInternalServerError)
@@ -1413,12 +1819,14 @@ func parseIngredientsForm(r *http.Request) ([]db.Ingredient, error) {
 		ingredient := ingredientsMap[index]
 		switch field {
 		case "name":
-			ingredient.Name = value
+			// Standardize to title case for consistent display.
+			ingredient.Name = strings.Title(strings.ToLower(strings.TrimSpace(value)))
 		case "amount":
 			// Allow non-numeric amounts like "a pinch"
 			ingredient.Amount = value
 		case "unit":
-			ingredient.Unit = value
+			// Standardize to lower case for consistent matching.
+			ingredient.Unit = strings.ToLower(strings.TrimSpace(value))
 		}
 		ingredientsMap[index] = ingredient
 	}

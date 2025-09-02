@@ -1,4 +1,8 @@
-site.log
+# Environment variables
+.env
 
-# Ignore SSL certificates generated for local development
+# Local SSL certificates
 /certs/
+
+# Compiled binary (if any)
+potential-poetry

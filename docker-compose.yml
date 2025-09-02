@@ -4,17 +4,12 @@ services:
   web:
     build: .
     container_name: my_go_app
+    volumes:
+      - ./certs:/app/certs:ro
     ports:
       - "8443:8443"
-    volumes:
-      # Mount the certs for SSL. The init-ssl.sh script creates this directory.
-      - ./certs:/app/certs:ro
-    environment:
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=myuser
-      - DB_PASSWORD=mypassword
-      - DB_NAME=myapp
+    env_file:
+      - ./.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -24,15 +19,14 @@ services:
     image: postgres:15
     container_name: my_postgres
     environment:
-      POSTGRES_DB: myapp
-      POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Optional: mount init scripts
       - ./init-scripts:/docker-entrypoint-initdb.d
     restart: unless-stopped
     healthcheck:

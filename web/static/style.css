@@ -127,6 +127,34 @@ body {
     color: #FFFFFF;
 }
 
+.form-group-separator {
+    text-align: center;
+    margin: 20px 0;
+    font-weight: bold;
+    color: #757575;
+    position: relative;
+}
+
+.form-group-separator::before,
+.form-group-separator::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 40%;
+    height: 1px;
+    background-color: #3A3A3A;
+}
+
+.form-group-separator::before { left: 0; }
+.form-group-separator::after { right: 0; }
+
+.title-meta {
+    font-size: 0.8em;
+    font-weight: normal;
+    color: #B0BEC5; /* A lighter, less prominent color */
+    margin-left: 10px;
+}
+
 /* Styles for the recipe submission form */
 #ingredientForm {
     background-color: transparent; /* Override .content-container form style */
@@ -652,13 +680,18 @@ body {
     padding: 10px;
     min-height: 60px; /* Give a minimum height for drop interaction */
     flex-grow: 1;
-    transition: background-color 0.2s ease-in-out;
+    transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out;
     display: flex;
-    align-items: center;
+    /* align-items: center; */ /* Removed to allow vertical stacking */
+    flex-wrap: wrap; /* Allow multiple cards to wrap */
+    gap: 8px; /* Add a gap between cards in the same day */
+    align-content: flex-start; /* Align wrapped lines to the start */
+    border: 2px dashed transparent; /* Reserve space for border to prevent layout shift */
 }
 
 .day-drop-zone.drag-over {
-    background-color: #37474F; /* Highlight when dragging over */
+    background-color: #37474F; /* Highlight background when dragging over */
+    border-color: #2196F3; /* Highlight border to indicate a drop target */
 }
 
 .meal-card-planner {
@@ -667,15 +700,20 @@ body {
     border-radius: 4px;
     padding: 8px;
     font-size: 0.9em;
-    cursor: move; /* Indicate that the item is draggable */
+    cursor: grab; /* Better cursor to indicate draggability */
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 8px;
+    flex-grow: 1; /* Allow card to grow if it's the only one */
+    max-width: 100%; /* Prevent overflow */
+    transition: box-shadow 0.2s ease-in-out, opacity 0.2s ease-in-out;
 }
 
 .meal-card-planner.dragging {
-    opacity: 0.5;
+    opacity: 0.4; /* Make the original item more transparent */
+    cursor: grabbing;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5); /* Add a "lifted" effect */
 }
 
 .meal-card-info {
@@ -693,16 +731,59 @@ body {
     align-items: center;
     flex-shrink: 0;
     transition: color 0.2s ease-in-out;
+    cursor: grab; /* Make the handle itself grabbable */
 }
 
 .meal-card-planner:hover .drag-handle {
     color: #9E9E9E; /* Lighter grey on hover */
 }
 
+.meal-card-planner:active .drag-handle,
+.meal-card-planner.dragging .drag-handle {
+    cursor: grabbing; /* Use 'grabbing' cursor during the drag action */
+}
+
 .meal-card-title {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.meal-card-actions {
+    display: flex;
+    flex-direction: column;
+    margin-left: 8px;
+    /* Visually hide the buttons by default and show on focus */
+    opacity: 0;
+    transition: opacity 0.2s ease-in-out;
+}
+
+/* Show move buttons when the card or any of its children has focus */
+.meal-card-planner:focus-within .meal-card-actions {
+    opacity: 1;
+}
+
+.move-button {
+    background: #37474F;
+    color: #ECEFF1;
+    border: none;
+    cursor: pointer;
+    padding: 2px 6px;
+    font-size: 0.8em;
+    line-height: 1;
+}
+
+.move-button:hover {
+    background: #455A64;
+}
+
+.move-button.move-up {
+    border-radius: 4px 4px 0 0;
+    border-bottom: 1px solid #424242;
+}
+
+.move-button.move-down {
+    border-radius: 0 0 4px 4px;
 }
 
 .meal-card-quantity {
@@ -946,8 +1027,8 @@ body {
 }
 
 .sort-link.active {
-    background-color: #009688;
-    color: #FFFFFF;
+    background-color: #1565C0; /* Darker blue for AA contrast (4.63:1) */
+    color: #ECEFF1;
     font-weight: bold;
 }
 
