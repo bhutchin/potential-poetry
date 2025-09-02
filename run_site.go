@@ -52,9 +52,15 @@ type MealPlanCookieData struct {
 type MealPlanPageData struct {
 	AllRecipes   []db.RecipeInfo
 	RecipeCounts map[int]int // Map of Recipe ID to its count in the meal plan
-	ShoppingList []db.Ingredient
+	ShoppingList []ShoppingListCategory
 	MealOrder    []string
 	SavedPlans   []db.MealPlanInfo
+}
+
+// ShoppingListCategory holds a group of ingredients for a specific store aisle.
+type ShoppingListCategory struct {
+	CategoryName string
+	Ingredients  []db.Ingredient
 }
 
 // ImportPageData holds data for the recipe import page.
@@ -77,6 +83,13 @@ const recipesPerPage = 20
 // allUnits is a list of all known measurement units, sorted by length descending.
 // This is used for parsing ingredient strings. It is populated at startup.
 var allUnits []string
+
+// ingredientCategoryOverrides caches the user-defined category mappings.
+var ingredientCategoryOverrides = make(map[string]string)
+
+// groceryCategories holds the dynamically loaded grocery categories and their keywords.
+var groceryCategoryMap = make(map[string][]string)
+var categoryOrder []string
 
 func init() {
 	// Populate allUnits from the conversion maps for ingredient parsing.
@@ -132,7 +145,7 @@ var orderedUnits = []struct {
 	Name  string
 	Value float64 // Value in the base unit (teaspoons)
 }{
-	{"gallon", 768}, {"quart", 192}, {"pint", 96}, {"cup", 48}, {"tablespoon", 3}, {"teaspoon", 1},
+	{"cup", 48}, {"tablespoon", 3}, {"teaspoon", 1},
 }
 
 // weightConversions maps various weight unit names to their equivalent value in the base unit (grams).
@@ -346,6 +359,11 @@ func main() {
 	r.HandleFunc("/meal-plan/set-units", logRequest(setUnitSystemHandler)).Methods("GET")
 	// New API endpoint for AJAX updates
 	r.HandleFunc("/meal-plan/api/update", logRequest(updateShoppingListAPIHandler)).Methods("POST")
+	r.HandleFunc("/api/ingredient/set-category", logRequest(setIngredientCategoryHandler)).Methods("POST")
+	r.HandleFunc("/settings/categories", logRequest(genericFileHandler("manage_categories.html"))).Methods("GET")
+	r.HandleFunc("/api/grocery-categories", logRequest(getGroceryCategoriesAPIHandler)).Methods("GET")
+	r.HandleFunc("/api/grocery-categories", logRequest(saveGroceryCategoryAPIHandler)).Methods("POST")
+	r.HandleFunc("/api/grocery-categories/{id:[0-9]+}", logRequest(deleteGroceryCategoryAPIHandler)).Methods("DELETE")
 
 	certFile := "certs/cert.pem"
 	keyFile := "certs/key.pem"
@@ -360,6 +378,118 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to start TLS server: %v", err)
 	}
+}
+
+func loadGroceryCategories() {
+	categories, err := db.FetchAllGroceryCategories()
+	if err != nil {
+		log.Fatalf("FATAL: Could not load grocery categories from database: %v", err)
+	}
+
+	newMap := make(map[string][]string)
+	newOrder := make([]string, len(categories))
+	for i, cat := range categories {
+		newMap[cat.Name] = cat.Keywords
+		newOrder[i] = cat.Name
+	}
+
+	groceryCategoryMap = newMap
+	categoryOrder = newOrder
+	log.Printf("Loaded %d grocery categories.", len(categoryOrder))
+}
+
+func loadIngredientCategoryOverrides() {
+	overrides, err := db.FetchAllIngredientCategoryOverrides()
+	if err != nil {
+		log.Printf("Warning: could not load ingredient category overrides: %v", err)
+		return
+	}
+	ingredientCategoryOverrides = overrides
+	log.Printf("Loaded %d ingredient category overrides.", len(ingredientCategoryOverrides))
+}
+
+func setIngredientCategoryHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IngredientName string `json:"ingredientName"`
+		CategoryName   string `json:"categoryName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.IngredientName == "" || req.CategoryName == "" {
+		http.Error(w, "Ingredient name and category name are required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate category name against our known list
+	isValidCategory := false
+	for _, cat := range categoryOrder {
+		if cat == req.CategoryName {
+			isValidCategory = true
+			break
+		}
+	}
+	if !isValidCategory {
+		http.Error(w, "Invalid category name", http.StatusBadRequest)
+		return
+	}
+
+	lowerIngredientName := strings.ToLower(req.IngredientName)
+	if err := db.SetIngredientCategoryOverride(lowerIngredientName, req.CategoryName); err != nil {
+		log.Printf("Error setting ingredient category override: %v", err)
+		http.Error(w, "Failed to save override", http.StatusInternalServerError)
+		return
+	}
+
+	// Update the in-memory cache
+	ingredientCategoryOverrides[lowerIngredientName] = req.CategoryName
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func getGroceryCategoriesAPIHandler(w http.ResponseWriter, r *http.Request) {
+	categories, err := db.FetchAllGroceryCategories()
+	if err != nil {
+		log.Printf("API Error: could not fetch grocery categories: %v", err)
+		http.Error(w, "Failed to fetch categories", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(categories)
+}
+
+func saveGroceryCategoryAPIHandler(w http.ResponseWriter, r *http.Request) {
+	var req db.GroceryCategory
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "Category name is required", http.StatusBadRequest)
+		return
+	}
+
+	id, err := db.SaveGroceryCategory(req.ID, req.Name, req.DisplayOrder, req.Keywords)
+	if err != nil {
+		log.Printf("API Error: could not save grocery category: %v", err)
+		http.Error(w, "Failed to save category", http.StatusInternalServerError)
+		return
+	}
+
+	loadGroceryCategories() // Reload cache
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "success", "id": id})
+}
+
+func deleteGroceryCategoryAPIHandler(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+	db.DeleteGroceryCategory(id)
+	loadGroceryCategories() // Reload cache
+	w.WriteHeader(http.StatusOK)
 }
 
 func setUnitSystemHandler(w http.ResponseWriter, r *http.Request) {
@@ -752,7 +882,7 @@ func handleViewMealPlan(w http.ResponseWriter, r *http.Request) {
 		unitSystem = unitSystemCookie.Value
 	}
 
-	var shoppingList []db.Ingredient
+	var shoppingList []ShoppingListCategory
 	if len(recipeCounts) > 0 {
 		shoppingList, err = consolidateIngredients(recipeCounts, unitSystem)
 		if err != nil {
@@ -810,11 +940,13 @@ func handleViewMealPlan(w http.ResponseWriter, r *http.Request) {
 		PlansHasPrev     bool
 		PlansNextPage    int
 		PlansPrevPage    int
+		CategoryOrder    []string
 	}{
 		MealPlanPageData: MealPlanPageData{
 			AllRecipes: allRecipes, RecipeCounts: recipeCounts, ShoppingList: shoppingList, MealOrder: mealOrder, SavedPlans: savedPlans,
 		}, UnitSystem: unitSystem, TotalMealCount: totalMealCount,
 		URL: r.URL, SortOrder: sortOrder, PlansCurrentPage: page, PlansTotalPages: totalPages, PlansHasNext: page < totalPages, PlansHasPrev: page > 1, PlansNextPage: page + 1, PlansPrevPage: page - 1,
+		CategoryOrder: categoryOrder,
 	}
 	renderMealPlanTemplate(w, data)
 }
@@ -838,7 +970,7 @@ func printShoppingListHandler(w http.ResponseWriter, r *http.Request) {
 		unitSystem = unitSystemCookie.Value
 	}
 
-	var shoppingList []db.Ingredient
+	var shoppingList []ShoppingListCategory
 	if len(recipeCounts) > 0 {
 		var err error
 		shoppingList, err = consolidateIngredients(recipeCounts, unitSystem)
@@ -851,7 +983,7 @@ func printShoppingListHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Use an anonymous struct for the template data, as we only need the list.
 	data := struct {
-		ShoppingList []db.Ingredient
+		ShoppingList []ShoppingListCategory
 	}{
 		ShoppingList: shoppingList,
 	}
@@ -950,7 +1082,7 @@ func updateShoppingListAPIHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type apiResponse struct {
-		ShoppingList   []db.Ingredient `json:"shoppingList"`
+		ShoppingList   []ShoppingListCategory `json:"shoppingList"`
 		TotalMealCount int             `json:"totalMealCount"`
 	}
 
@@ -1536,6 +1668,9 @@ type ingredientAggregator struct {
 	// volumes holds ingredients convertible to a base volume unit (teaspoons).
 	// map[IngredientName]TotalInBaseUnit
 	volumes map[string]float64
+	// counts holds ingredients that are measured in simple counts with no unit (e.g., "2 eggs").
+	// map[IngredientName]TotalAmount
+	counts map[string]float64
 	// weights holds ingredients convertible to a base weight unit (grams).
 	// map[IngredientName]TotalInBaseUnit
 	weights map[string]float64
@@ -1550,6 +1685,7 @@ type ingredientAggregator struct {
 func newIngredientAggregator() *ingredientAggregator {
 	return &ingredientAggregator{
 		volumes:    make(map[string]float64),
+		counts:     make(map[string]float64),
 		weights:    make(map[string]float64),
 		others:     make(map[string]map[string]float64),
 		nonNumeric: []db.Ingredient{},
@@ -1561,7 +1697,9 @@ func (a *ingredientAggregator) add(ing db.Ingredient, multiplier int) {
 	name := strings.ToLower(strings.TrimSpace(ing.Name))
 	unit := strings.ToLower(strings.TrimSpace(ing.Unit))
 
-	amount, err := strconv.ParseFloat(ing.Amount, 64)
+	// First, normalize the amount string to handle fractions like "1/2" or "1 1/2"
+	normalizedAmountStr := normalizeAmount(ing.Amount)
+	amount, err := strconv.ParseFloat(normalizedAmountStr, 64)
 	if err != nil {
 		// Amount is not a number (e.g., "a pinch", "to taste").
 		// Add it to the list for each instance in the plan.
@@ -1572,6 +1710,12 @@ func (a *ingredientAggregator) add(ing db.Ingredient, multiplier int) {
 	}
 
 	totalAmount := amount * float64(multiplier)
+
+	// Explicitly handle unit-less items first.
+	if unit == "" {
+		a.counts[name] += totalAmount
+		return
+	}
 
 	// Check for convertible volume units.
 	if factor, ok := unitConversions[unit]; ok {
@@ -1589,7 +1733,7 @@ func (a *ingredientAggregator) add(ing db.Ingredient, multiplier int) {
 	if _, ok := a.others[name]; !ok {
 		a.others[name] = make(map[string]float64)
 	}
-	a.others[name][ing.Unit] += totalAmount
+	a.others[name][unit] += totalAmount
 }
 
 // buildShoppingList compiles the aggregated data into a final, sorted shopping list.
@@ -1628,6 +1772,15 @@ func (a *ingredientAggregator) buildShoppingList(unitSystem string) []db.Ingredi
 		})
 	}
 
+	// Process unit-less count ingredients.
+	for name, totalAmount := range a.counts {
+		shoppingList = append(shoppingList, db.Ingredient{
+			Name:   strings.Title(name),
+			Amount: strconv.FormatFloat(totalAmount, 'f', -1, 64),
+			Unit:   "",
+		})
+	}
+
 	// Process other numeric ingredients.
 	for name, unitMap := range a.others {
 		for unit, amount := range unitMap {
@@ -1654,7 +1807,7 @@ func (a *ingredientAggregator) buildShoppingList(unitSystem string) []db.Ingredi
 }
 
 // consolidateIngredients fetches ingredients for selected recipes and consolidates them into a shopping list.
-func consolidateIngredients(recipeCounts map[int]int, unitSystem string) ([]db.Ingredient, error) {
+func consolidateIngredients(recipeCounts map[int]int, unitSystem string) ([]ShoppingListCategory, error) {
 	aggregator := newIngredientAggregator()
 
 	for id, countMultiplier := range recipeCounts {
@@ -1672,7 +1825,42 @@ func consolidateIngredients(recipeCounts map[int]int, unitSystem string) ([]db.I
 		}
 	}
 
-	return aggregator.buildShoppingList(unitSystem), nil
+	flatShoppingList := aggregator.buildShoppingList(unitSystem)
+
+	// Now, group the flat list by grocery category
+	groupedIngredients := make(map[string][]db.Ingredient)
+	for _, ing := range flatShoppingList {
+		category := categorizeIngredient(ing.Name)
+		groupedIngredients[category] = append(groupedIngredients[category], ing)
+	}
+
+	// Create the final sorted list of categories
+	var categorizedList []ShoppingListCategory
+	for _, categoryName := range categoryOrder {
+		if ingredients, ok := groupedIngredients[categoryName]; ok {
+			categorizedList = append(categorizedList, ShoppingListCategory{
+				CategoryName: categoryName,
+				Ingredients:  ingredients,
+			})
+			delete(groupedIngredients, categoryName) // Remove it so we don't add it again
+		}
+	}
+
+	// Add any remaining categories that weren't in our preferred order
+	var remainingCategories []string
+	for categoryName := range groupedIngredients {
+		remainingCategories = append(remainingCategories, categoryName)
+	}
+	sort.Strings(remainingCategories) // Sort for consistent ordering
+
+	for _, categoryName := range remainingCategories {
+		categorizedList = append(categorizedList, ShoppingListCategory{
+			CategoryName: categoryName,
+			Ingredients:  groupedIngredients[categoryName],
+		})
+	}
+
+	return categorizedList, nil
 }
 
 // formatAmount converts a total amount in a base unit (teaspoons) to a human-readable
@@ -1786,6 +1974,27 @@ func formatWeightAmountMetric(totalGrams float64) (string, string) {
 	formattedAmount := strconv.FormatFloat(totalGrams, 'f', 2, 64)
 	formattedAmount = strings.TrimSuffix(formattedAmount, ".00")
 	return formattedAmount, "g"
+}
+
+func categorizeIngredient(name string) string {
+	lowerName := strings.ToLower(name)
+
+	// 1. Check for a user-defined override first.
+	if category, ok := ingredientCategoryOverrides[lowerName]; ok {
+		return category
+	}
+
+	// 2. Fall back to keyword-based categorization.
+	for _, categoryName := range categoryOrder {
+		if keywords, ok := groceryCategoryMap[categoryName]; ok {
+			for _, keyword := range keywords {
+				if strings.Contains(lowerName, keyword) {
+					return categoryName
+				}
+			}
+		}
+	}
+	return "Other"
 }
 
 func submitIngredientsHandler(w http.ResponseWriter, r *http.Request) {

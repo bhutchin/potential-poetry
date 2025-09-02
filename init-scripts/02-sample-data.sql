@@ -74,3 +74,31 @@ WITH cat_dinner AS (INSERT INTO categories (name) VALUES ('dinner') ON CONFLICT(
      recipe2 AS (SELECT id FROM recipes WHERE title = 'Simple Tomato Pasta')
 INSERT INTO recipe_categories (recipe_id, category_id)
 SELECT r2.id, cid.id FROM recipe2 r2, (SELECT id FROM cat_dinner UNION ALL SELECT id FROM cat_pasta UNION ALL SELECT id FROM cat_quick UNION ALL SELECT id FROM cat_vegetarian) AS cid;
+
+
+-- Populate default grocery categories and keywords
+WITH cat_produce AS (INSERT INTO grocery_categories (name, display_order) VALUES ('Produce', 1) RETURNING id)
+INSERT INTO grocery_category_keywords (category_id, keyword)
+SELECT id, k FROM cat_produce, unnest(ARRAY['lettuce', 'onion', 'garlic', 'tomato', 'potato', 'apple', 'banana', 'orange', 'lemon', 'lime', 'pepper', 'carrot', 'broccoli', 'spinach', 'celery', 'cucumber', 'avocado', 'basil', 'parsley', 'cilantro', 'rosemary', 'thyme', 'ginger']) AS k(k);
+
+WITH cat_meat AS (INSERT INTO grocery_categories (name, display_order) VALUES ('Meat & Seafood', 2) RETURNING id)
+INSERT INTO grocery_category_keywords (category_id, keyword)
+SELECT id, k FROM cat_meat, unnest(ARRAY['chicken', 'beef', 'pork', 'lamb', 'turkey', 'sausage', 'bacon', 'ham', 'steak', 'mince', 'salmon', 'tuna', 'shrimp', 'cod', 'fish']) AS k(k);
+
+WITH cat_dairy AS (INSERT INTO grocery_categories (name, display_order) VALUES ('Dairy & Eggs', 3) RETURNING id)
+INSERT INTO grocery_category_keywords (category_id, keyword)
+SELECT id, k FROM cat_dairy, unnest(ARRAY['milk', 'cheese', 'cheddar', 'mozzarella', 'parmesan', 'yogurt', 'butter', 'cream', 'sour cream', 'egg']) AS k(k);
+
+WITH cat_bakery AS (INSERT INTO grocery_categories (name, display_order) VALUES ('Bakery', 4) RETURNING id)
+INSERT INTO grocery_category_keywords (category_id, keyword)
+SELECT id, k FROM cat_bakery, unnest(ARRAY['bread', 'baguette', 'buns', 'rolls', 'bagel', 'croissant', 'tortilla']) AS k(k);
+
+WITH cat_pantry AS (INSERT INTO grocery_categories (name, display_order) VALUES ('Pantry', 5) RETURNING id)
+INSERT INTO grocery_category_keywords (category_id, keyword)
+SELECT id, k FROM cat_pantry, unnest(ARRAY['flour', 'sugar', 'salt', 'oil', 'vinegar', 'pasta', 'rice', 'beans', 'lentils', 'canned', 'crushed tomatoes', 'broth', 'stock', 'soy sauce', 'ketchup', 'mustard', 'mayonnaise', 'spices', 'oregano', 'paprika', 'cumin', 'cinnamon', 'nutmeg', 'vanilla extract', 'baking soda', 'baking powder', 'yeast', 'chocolate chips', 'nuts', 'almonds', 'walnuts', 'peanuts', 'honey', 'syrup', 'oats']) AS k(k);
+
+WITH cat_frozen AS (INSERT INTO grocery_categories (name, display_order) VALUES ('Frozen', 6) RETURNING id)
+INSERT INTO grocery_category_keywords (category_id, keyword)
+SELECT id, k FROM cat_frozen, unnest(ARRAY['frozen peas', 'frozen corn', 'ice cream']) AS k(k);
+
+INSERT INTO grocery_categories (name, display_order) VALUES ('Other', 99);

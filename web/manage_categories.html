@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Manage Grocery Categories</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="content-container">
+        <h1>Manage Grocery Categories</h1>
+        <p>Here you can add, edit, or delete the categories used for your shopping list. Keywords are used to automatically sort ingredients.</p>
+
+        <div id="categories-list">
+            <!-- Categories will be loaded here by JavaScript -->
+        </div>
+
+        <div class="settings-section">
+            <h3 class="section-title">Add New Category</h3>
+            <div class="category-card" id="new-category-form">
+                <div class="form-group">
+                    <label for="new-cat-name">Category Name</label>
+                    <input type="text" id="new-cat-name" placeholder="e.g., Snacks">
+                </div>
+                <div class="form-group">
+                    <label for="new-cat-order">Display Order</label>
+                    <input type="number" id="new-cat-order" value="100">
+                </div>
+                <div class="form-group">
+                    <label for="new-cat-keywords">Keywords (comma-separated)</label>
+                    <textarea id="new-cat-keywords" rows="2" placeholder="e.g., chips, pretzels, crackers"></textarea>
+                </div>
+                <div class="form-actions" style="justify-content: flex-start;">
+                    <button type="button" id="add-new-category-btn" class="submit-button">Add Category</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="page-footer-nav">
+        <a href="/" class="nav-button home">Return to Home Page</a>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const categoriesListDiv = document.getElementById('categories-list');
+        const addNewBtn = document.getElementById('add-new-category-btn');
+
+        function renderCategory(cat) {
+            const keywords = cat.Keywords ? cat.Keywords.join(', ') : '';
+            const card = document.createElement('div');
+            card.className = 'category-card';
+            card.dataset.id = cat.ID;
+            card.innerHTML = `
+                <div class="form-group">
+                    <label>Category Name</label>
+                    <input type="text" class="cat-name" value="${cat.Name}">
+                </div>
+                <div class="form-group">
+                    <label>Display Order</label>
+                    <input type="number" class="cat-order" value="${cat.DisplayOrder}">
+                </div>
+                <div class="form-group">
+                    <label>Keywords (comma-separated)</label>
+                    <textarea class="cat-keywords" rows="3">${keywords}</textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="save-cat-btn submit-button">Save Changes</button>
+                    <button type="button" class="delete-cat-btn remove-button">Delete</button>
+                </div>
+            `;
+            return card;
+        }
+
+        async function loadCategories() {
+            try {
+                const response = await fetch('/api/grocery-categories');
+                if (!response.ok) throw new Error('Failed to fetch categories');
+                const categories = await response.json();
+                categoriesListDiv.innerHTML = '';
+                categories.forEach(cat => {
+                    categoriesListDiv.appendChild(renderCategory(cat));
+                });
+            } catch (error) {
+                console.error('Error loading categories:', error);
+                categoriesListDiv.innerHTML = '<p class="alert alert-danger">Could not load categories.</p>';
+            }
+        }
+
+        async function saveCategory(cardElement) {
+            const id = parseInt(cardElement.dataset.id, 10) || 0;
+            const name = cardElement.querySelector('.cat-name').value;
+            const order = parseInt(cardElement.querySelector('.cat-order').value, 10);
+            const keywords = cardElement.querySelector('.cat-keywords').value.split(',').map(k => k.trim()).filter(Boolean);
+
+            if (!name) {
+                alert('Category name is required.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/grocery-categories', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ID: id, Name: name, DisplayOrder: order, Keywords: keywords })
+                });
+                if (!response.ok) throw new Error('Failed to save category');
+                await loadCategories(); // Reload all to reflect changes
+            } catch (error) {
+                console.error('Error saving category:', error);
+                alert('Failed to save category.');
+            }
+        }
+
+        async function deleteCategory(id) {
+            if (!confirm('Are you sure you want to delete this category? This cannot be undone.')) return;
+
+            try {
+                const response = await fetch(`/api/grocery-categories/${id}`, { method: 'DELETE' });
+                if (!response.ok) throw new Error('Failed to delete category');
+                await loadCategories();
+            } catch (error) {
+                console.error('Error deleting category:', error);
+                alert('Failed to delete category.');
+            }
+        }
+
+        // Event delegation for save/delete buttons
+        categoriesListDiv.addEventListener('click', (e) => {
+            const card = e.target.closest('.category-card');
+            if (!card) return;
+
+            if (e.target.classList.contains('save-cat-btn')) {
+                saveCategory(card);
+            } else if (e.target.classList.contains('delete-cat-btn')) {
+                deleteCategory(parseInt(card.dataset.id, 10));
+            }
+        });
+
+        // Event listener for adding a new category
+        addNewBtn.addEventListener('click', () => {
+            const form = document.getElementById('new-category-form');
+            const nameInput = document.getElementById('new-cat-name');
+            const orderInput = document.getElementById('new-cat-order');
+            const keywordsInput = document.getElementById('new-cat-keywords');
+
+            const name = nameInput.value;
+            const order = parseInt(orderInput.value, 10);
+            const keywords = keywordsInput.value.split(',').map(k => k.trim()).filter(Boolean);
+
+            if (!name) {
+                alert('Category name is required.');
+                return;
+            }
+
+            fetch('/api/grocery-categories', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ID: 0, Name: name, DisplayOrder: order, Keywords: keywords })
+            })
+            .then(response => {
+                if (!response.ok) throw new Error('Failed to add category');
+                nameInput.value = '';
+                keywordsInput.value = '';
+                orderInput.value = parseInt(orderInput.value, 10) + 1; // Increment for next entry
+                return loadCategories();
+            })
+            .catch(error => {
+                console.error('Error adding category:', error);
+                alert('Failed to add new category.');
+            });
+        });
+
+        // Initial load
+        loadCategories();
+    });
+    </script>
+</body>
+</html>
+

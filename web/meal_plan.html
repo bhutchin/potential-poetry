@@ -39,10 +39,15 @@
                         <input type="checkbox" class="recipe-select-toggle" id="recipe_toggle_{{.ID}}" data-target-id="count_{{.ID}}" {{if gt (index $.RecipeCounts .ID) 0}}checked{{end}}>
                         <label for="recipe_toggle_{{.ID}}">{{.Title}}</label>
                     </div>
-                    <div class="custom-number-input" {{if not (gt (index $.RecipeCounts .ID) 0)}}style="display: none;"{{end}}>
-                        <button type="button" class="quantity-btn quantity-down" aria-label="Decrease quantity">-</button>
-                        <input type="number" name="count_{{.ID}}" value="{{index $.RecipeCounts .ID}}" min="0" id="count_{{.ID}}" class="recipe-count-input">
-                        <button type="button" class="quantity-btn quantity-up" aria-label="Increase quantity">+</button>
+                    <div class="recipe-item-controls">
+                        <a href="/recipe/{{.ID}}" class="view-recipe-link" target="_blank" title="View Recipe in new tab">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                        </a>
+                        <div class="custom-number-input" {{if not (gt (index $.RecipeCounts .ID) 0)}}style="display: none;"{{end}}>
+                            <button type="button" class="quantity-btn quantity-down" aria-label="Decrease quantity">-</button>
+                            <input type="number" name="count_{{.ID}}" value="{{index $.RecipeCounts .ID}}" min="0" id="count_{{.ID}}" class="recipe-count-input">
+                            <button type="button" class="quantity-btn quantity-up" aria-label="Increase quantity">+</button>
+                        </div>
                     </div>
                 </div>
                 {{end}}
@@ -110,15 +115,39 @@
             </thead>
             <tbody id="shopping-list-body">
                 {{range .ShoppingList}}
-                <tr>
-                    <td>{{.Name}}</td>
-                    <td>{{.Amount}}</td>
-                    <td>{{.Unit}}</td>
-                </tr>
+                    {{if .Ingredients}}
+                    <tr class="category-header-row">
+                        <th colspan="3">{{.CategoryName}}</th>
+                    </tr>
+                    {{range .Ingredients}}
+                    <tr>
+                        <td class="ingredient-name-cell">
+                            <span>{{.Name}}</span>
+                            <button class="edit-category-btn" data-ingredient-name="{{.Name}}" title="Change Category">✎</button>
+                        </td>
+                        <td>{{.Amount}}</td>
+                        <td>{{.Unit}}</td>
+                    </tr>
+                    {{end}}
+                    {{end}}
                 {{end}}
             </tbody>
         </table>
         </section>
+
+        <!-- Modal for changing ingredient category -->
+        <div id="category-modal" class="modal">
+            <div class="modal-content">
+                <span class="close-button">&times;</span>
+                <h4>Change Category for <span id="modal-ingredient-name"></span></h4>
+                <select id="category-select">
+                    {{range .CategoryOrder}}
+                    <option value="{{.}}">{{.}}</option>
+                    {{end}}
+                </select>
+                <button id="save-category-btn" class="submit-button">Save</button>
+            </div>
+        </div>
 
         <section aria-labelledby="saved-plans-title">
         <h3 id="saved-plans-title" class="section-title">Saved Meal Plans</h3>
@@ -197,7 +226,9 @@
                         <span class="drag-handle" aria-hidden="true">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M7 2a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zM7 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zM7 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-3 3a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm3 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/></svg>
                         </span>
-                        <span class="meal-card-title">${title}</span>
+                        <a href="/recipe/${recipeId}" target="_blank" class="meal-card-link" title="View Recipe in new tab">
+                            <span class="meal-card-title">${title}</span>
+                        </a>
                     </div>
                     <span class="meal-card-quantity">x${quantity}</span>
                     <div class="meal-card-actions">
@@ -416,9 +447,22 @@
                         totalCountSpan.textContent = `(${data.totalMealCount} ${mealText} total)`;
 
                         tableBody.innerHTML = ''; // Clear existing rows
-                        data.shoppingList.forEach(ing => {
-                            const row = tableBody.insertRow();
-                            row.innerHTML = `<td>${ing.Name}</td><td>${ing.Amount}</td><td>${ing.Unit}</td>`;
+                        data.shoppingList.forEach(category => {
+                            if (category.Ingredients && category.Ingredients.length > 0) {
+                                // Add category header row
+                                const headerRow = tableBody.insertRow();
+                                headerRow.className = 'category-header-row';
+                                headerRow.innerHTML = `<th colspan="3">${category.CategoryName}</th>`;
+
+                                // Add ingredient rows
+                                category.Ingredients.forEach(ing => {
+                                    const ingRow = tableBody.insertRow();
+                                    ingRow.innerHTML = `
+                                        <td class="ingredient-name-cell"><span>${ing.Name}</span> <button class="edit-category-btn" data-ingredient-name="${ing.Name}" title="Change Category">✎</button></td>
+                                        <td>${ing.Amount}</td>
+                                        <td>${ing.Unit}</td>`;
+                                });
+                            }
                         });
                     } else {
                         weeklyPlanSection.style.display = 'none';
@@ -437,6 +481,71 @@
                         button.disabled = false;
                         button.textContent = originalButtonText;
                     }, 2000); // Revert button text after 2 seconds
+                });
+            });
+
+            // --- Category Override Modal Logic ---
+            const categoryModal = document.getElementById('category-modal');
+            const modalIngredientName = document.getElementById('modal-ingredient-name');
+            const categorySelect = document.getElementById('category-select');
+            const saveCategoryBtn = document.getElementById('save-category-btn');
+            const closeModalBtn = categoryModal.querySelector('.close-button');
+            const shoppingListBody = document.getElementById('shopping-list-body');
+            let currentIngredientName = null;
+
+            function openCategoryModal(ingredientName) {
+                currentIngredientName = ingredientName;
+                modalIngredientName.textContent = ingredientName;
+                categoryModal.style.display = 'block';
+            }
+
+            function closeCategoryModal() {
+                categoryModal.style.display = 'none';
+                currentIngredientName = null;
+            }
+
+            shoppingListBody.addEventListener('click', (e) => {
+                if (e.target.classList.contains('edit-category-btn')) {
+                    const ingredientName = e.target.dataset.ingredientName;
+                    openCategoryModal(ingredientName);
+                }
+            });
+
+            closeModalBtn.addEventListener('click', closeCategoryModal);
+            window.addEventListener('click', (e) => {
+                if (e.target === categoryModal) {
+                    closeCategoryModal();
+                }
+            });
+
+            saveCategoryBtn.addEventListener('click', () => {
+                const newCategory = categorySelect.value;
+                if (!currentIngredientName || !newCategory) return;
+
+                const originalButtonText = saveCategoryBtn.textContent;
+                saveCategoryBtn.disabled = true;
+                saveCategoryBtn.textContent = 'Saving...';
+
+                fetch('/api/ingredient/set-category', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ingredientName: currentIngredientName,
+                        categoryName: newCategory
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) throw new Error('Failed to save category');
+                    closeCategoryModal();
+                    document.getElementById('update-plan-btn').click(); // Refresh the list
+                })
+                .catch(error => {
+                    console.error('Error saving category:', error);
+                    alert('Could not save category change.');
+                })
+                .finally(() => {
+                    saveCategoryBtn.disabled = false;
+                    saveCategoryBtn.textContent = originalButtonText;
                 });
             });
 

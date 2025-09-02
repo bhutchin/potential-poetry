@@ -428,10 +428,26 @@ body {
     margin-bottom: 15px;
 }
 
-.servings-adjuster input[type="number"] {
-    width: 60px;
+.servings-adjuster {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* The .custom-number-input class is already defined and will be reused */
+
+/* Style number inputs inside our custom component to look clean */
+.custom-number-input input[type="number"] {
+    -webkit-appearance: none;
+    -moz-appearance: textfield;
+    margin: 0;
+    border: none;
+    background-color: transparent;
+    width: 50px;
+    color: #E0E0E0;
     text-align: center;
-    padding: 8px;
+    font-size: 1.1em;
+    font-weight: bold;
 }
 
 /* Home Page Specific Styles */
@@ -479,6 +495,9 @@ body {
 
 .nav-button.import-recipe { background-color: #ff9800; } /* Orange */
 .nav-button.import-recipe:hover { background-color: #f57c00; transform: translateY(-2px); }
+
+.nav-button.settings { background-color: #607D8B; } /* Blue Grey */
+.nav-button.settings:hover { background-color: #455A64; transform: translateY(-2px); }
 
 .nav-button.home { background-color: #4CAF50; } /* Green for home/back/cancel links, matches submit */
 .nav-button.home:hover { background-color: #388E3C; transform: translateY(-2px); }
@@ -584,6 +603,13 @@ body {
     align-items: center;
     justify-content: space-between; /* Pushes label and input apart */
     gap: 15px;
+}
+
+.recipe-item-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    flex-shrink: 0;
 }
 
 .recipe-count-item label {
@@ -755,6 +781,19 @@ body {
     cursor: grabbing; /* Use 'grabbing' cursor during the drag action */
 }
 
+.meal-card-link {
+    text-decoration: none;
+    color: inherit;
+    display: block;
+    overflow: hidden;
+    flex-grow: 1;
+}
+
+.meal-card-link:hover .meal-card-title {
+    text-decoration: underline;
+    color: #2196F3;
+}
+
 .meal-card-title {
     white-space: nowrap;
     overflow: hidden;
@@ -808,6 +847,18 @@ body {
     flex-shrink: 0;
 }
 
+.view-recipe-link {
+    color: #9E9E9E;
+    display: flex;
+    align-items: center;
+    transition: color 0.2s ease-in-out;
+}
+
+.view-recipe-link:hover {
+    color: #2196F3;
+}
+
+
 /* Shopping List Table on Meal Plan Page */
 .shopping-list-table {
     width: 100%;
@@ -830,6 +881,22 @@ body {
 
 .shopping-list-table tbody tr:nth-child(even) {
     background-color: #252525;
+}
+
+.shopping-list-table .ingredient-name-cell {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.shopping-list-table .category-header-row th {
+    background-color: #37474F;
+    color: #ECEFF1;
+    font-size: 1.1em;
+    padding: 10px 15px;
+    text-align: left;
+    border-top: 2px solid #455A64; /* Separator from previous category */
 }
 
 /* Column widths for shopping list */
@@ -1162,3 +1229,82 @@ body {
 #cook-mode-exit { background-color: #616161; color: white; }
 #cook-mode-prev { background-color: #2196F3; color: white; }
 #cook-mode-next { background-color: #4CAF50; color: white; }
+
+/* Edit Category Button */
+.edit-category-btn {
+    background: none;
+    border: none;
+    color: #9E9E9E;
+    cursor: pointer;
+    font-size: 1em;
+    margin-left: 8px;
+    padding: 0 5px;
+    display: inline-block;
+    vertical-align: middle;
+    opacity: 0; /* Hidden by default */
+    transition: opacity 0.2s, color 0.2s;
+    flex-shrink: 0;
+}
+
+.shopping-list-table tr:hover .edit-category-btn {
+    opacity: 0.6; /* Show on row hover */
+}
+
+.edit-category-btn:hover {
+    opacity: 1;
+    color: #2196F3;
+}
+
+/* Category Modal */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1001;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.7);
+}
+
+.modal-content {
+    background-color: #2C2C2C;
+    margin: 15% auto;
+    padding: 20px;
+    border: 1px solid #424242;
+    border-radius: 8px;
+    width: 80%;
+    max-width: 400px;
+    position: relative;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+}
+
+.modal-content h4 { margin-top: 0; color: #FFFFFF; }
+.modal-content #modal-ingredient-name { font-style: italic; color: #009688; }
+.modal-content select { width: 100%; padding: 10px; margin: 20px 0; border: 1px solid #3A3A3A; border-radius: 4px; background-color: #252525; color: #E0E0E0; font-size: 1em; }
+.modal-content .submit-button { margin-top: 0; }
+
+.close-button { color: #aaa; float: right; font-size: 28px; font-weight: bold; position: absolute; top: 10px; right: 20px; }
+.close-button:hover,
+.close-button:focus { color: white; text-decoration: none; cursor: pointer; }
+
+/* Settings Page Styles */
+.settings-section {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid #3A3A3A;
+}
+
+.category-card {
+    background-color: #2C2C2C;
+    border: 1px solid #3A3A3A;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.category-card textarea {
+    width: 100%;
+    box-sizing: border-box;
+}

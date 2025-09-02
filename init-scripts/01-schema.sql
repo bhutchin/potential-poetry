@@ -51,3 +51,23 @@ CREATE TABLE meal_plans (
     data JSONB NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- This table stores user-defined overrides for ingredient categories.
+CREATE TABLE ingredient_category_overrides (
+    ingredient_name TEXT PRIMARY KEY, -- Stored as lowercase
+    category_name TEXT NOT NULL
+);
+
+-- This table stores the grocery store categories for the shopping list.
+CREATE TABLE grocery_categories (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    display_order INTEGER DEFAULT 0
+);
+
+-- This table stores keywords used to automatically assign ingredients to a grocery category.
+CREATE TABLE grocery_category_keywords (
+    id SERIAL PRIMARY KEY,
+    category_id INTEGER NOT NULL REFERENCES grocery_categories(id) ON DELETE CASCADE,
+    keyword TEXT NOT NULL
+);

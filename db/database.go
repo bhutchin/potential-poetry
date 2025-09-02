@@ -45,6 +45,14 @@ type Category struct {
 	Name string
 }
 
+// GroceryCategory represents a shopping list category and its keywords.
+type GroceryCategory struct {
+	ID           int
+	Name         string
+	DisplayOrder int
+	Keywords     []string
+}
+
 // TagsToString joins the recipe's category names into a single, comma-separated string.
 func (r *Recipe) TagsToString() string {
 	if len(r.Categories) == 0 {
@@ -496,6 +504,95 @@ func SaveNamedMealPlan(name string, data string) error {
 	return nil
 }
 
+// FetchAllGroceryCategories retrieves all categories and their keywords from the database.
+func FetchAllGroceryCategories() ([]GroceryCategory, error) {
+	query := `
+		SELECT gc.id, gc.name, gc.display_order, COALESCE(string_agg(gck.keyword, ','), '') AS keywords
+		FROM grocery_categories gc
+		LEFT JOIN grocery_category_keywords gck ON gc.id = gck.category_id
+		GROUP BY gc.id, gc.name, gc.display_order
+		ORDER BY gc.display_order, gc.name`
+
+	rows, err := conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query grocery categories: %w", err)
+	}
+	defer rows.Close()
+
+	var categories []GroceryCategory
+	for rows.Next() {
+		var cat GroceryCategory
+		var keywordsStr string
+		if err := rows.Scan(&cat.ID, &cat.Name, &cat.DisplayOrder, &keywordsStr); err != nil {
+			return nil, fmt.Errorf("failed to scan grocery category: %w", err)
+		}
+		if keywordsStr != "" {
+			cat.Keywords = strings.Split(keywordsStr, ",")
+		} else {
+			cat.Keywords = []string{} // Ensure it's an empty slice, not nil
+		}
+		categories = append(categories, cat)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating grocery categories: %w", err)
+	}
+	return categories, nil
+}
+
+// SaveGroceryCategory creates or updates a category and its keywords.
+func SaveGroceryCategory(id int, name string, displayOrder int, keywords []string) (int, error) {
+	tx, err := conn.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if id == 0 { // Create new
+		err = tx.QueryRow(
+			"INSERT INTO grocery_categories (name, display_order) VALUES ($1, $2) RETURNING id",
+			name, displayOrder,
+		).Scan(&id)
+	} else { // Update existing
+		_, err = tx.Exec(
+			"UPDATE grocery_categories SET name = $1, display_order = $2 WHERE id = $3",
+			name, displayOrder, id,
+		)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to save grocery category: %w", err)
+	}
+
+	// This is simpler than diffing: just delete all old keywords and insert the new set.
+	_, err = tx.Exec("DELETE FROM grocery_category_keywords WHERE category_id = $1", id)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete old keywords: %w", err)
+	}
+
+	if len(keywords) > 0 {
+		stmt, err := tx.Prepare("INSERT INTO grocery_category_keywords (category_id, keyword) VALUES ($1, $2)")
+		if err != nil {
+			return 0, fmt.Errorf("failed to prepare keyword statement: %w", err)
+		}
+		defer stmt.Close()
+		for _, keyword := range keywords {
+			if trimmedKeyword := strings.TrimSpace(keyword); trimmedKeyword != "" {
+				if _, err := stmt.Exec(id, strings.ToLower(trimmedKeyword)); err != nil {
+					return 0, fmt.Errorf("failed to insert keyword '%s': %w", keyword, err)
+				}
+			}
+		}
+	}
+
+	return id, tx.Commit()
+}
+
+// DeleteGroceryCategory deletes a category and its associated keywords.
+func DeleteGroceryCategory(id int) error {
+	// ON DELETE CASCADE in the schema will handle deleting associated keywords.
+	_, err := conn.Exec("DELETE FROM grocery_categories WHERE id = $1", id)
+	return err
+}
+
 // LoadNamedMealPlan retrieves the JSON data of a saved meal plan by its ID.
 func LoadNamedMealPlan(id int) (string, error) {
 	var data string
@@ -671,4 +768,39 @@ func FetchRecipesByTag(tagName string, limit int, offset int) ([]Recipe, int, er
 	}
 
 	return recipes, totalRecipes, nil
+}
+
+// FetchAllIngredientCategoryOverrides retrieves all user-defined overrides.
+func FetchAllIngredientCategoryOverrides() (map[string]string, error) {
+	rows, err := conn.Query("SELECT ingredient_name, category_name FROM ingredient_category_overrides")
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch ingredient category overrides: %w", err)
+	}
+	defer rows.Close()
+
+	overrides := make(map[string]string)
+	for rows.Next() {
+		var ingredientName, categoryName string
+		if err := rows.Scan(&ingredientName, &categoryName); err != nil {
+			return nil, fmt.Errorf("failed to scan ingredient category override: %w", err)
+		}
+		overrides[ingredientName] = categoryName
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating ingredient category overrides: %w", err)
+	}
+	return overrides, nil
+}
+
+// SetIngredientCategoryOverride saves a user-defined category for an ingredient.
+func SetIngredientCategoryOverride(ingredientName, categoryName string) error {
+	query := `
+		INSERT INTO ingredient_category_overrides (ingredient_name, category_name)
+		VALUES ($1, $2)
+		ON CONFLICT (ingredient_name) DO UPDATE SET category_name = EXCLUDED.category_name`
+	_, err := conn.Exec(query, strings.ToLower(ingredientName), categoryName)
+	if err != nil {
+		return fmt.Errorf("failed to set ingredient category override for '%s': %w", ingredientName, err)
+	}
+	return nil
 }

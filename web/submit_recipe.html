@@ -36,7 +36,11 @@
 
             <div class="form-group">
                 <label for="servings">Servings</label>
-                <input type="number" id="servings" name="servings" placeholder="e.g., 4" value="{{if .Recipe.Servings}}{{.Recipe.Servings}}{{else}}4{{end}}" min="1" required>
+                <div class="custom-number-input">
+                    <button type="button" class="quantity-btn quantity-down" aria-label="Decrease servings">-</button>
+                    <input type="number" id="servings" name="servings" placeholder="e.g., 4" value="{{if .Recipe.Servings}}{{.Recipe.Servings}}{{else}}4{{end}}" min="1" required>
+                    <button type="button" class="quantity-btn quantity-up" aria-label="Increase servings">+</button>
+                </div>
             </div>
 
             <div class="form-group">
@@ -198,6 +202,25 @@
         document.addEventListener('DOMContentLoaded', () => {
             toggleRemoveButtons();
             toggleMethodRemoveButtons();
+
+            // Add event listeners for the servings +/- buttons
+            const servingsInput = document.getElementById('servings');
+            if (servingsInput) {
+                const servingsContainer = servingsInput.closest('.custom-number-input');
+                if (servingsContainer) {
+                    servingsContainer.addEventListener('click', (e) => {
+                        if (e.target.matches('.quantity-btn')) {
+                            let value = parseInt(servingsInput.value, 10) || 1;
+                            if (e.target.classList.contains('quantity-up')) {
+                                value++;
+                            } else if (e.target.classList.contains('quantity-down') && value > 1) {
+                                value--;
+                            }
+                            servingsInput.value = value;
+                        }
+                    });
+                }
+            }
         });
     </script>
 </body>

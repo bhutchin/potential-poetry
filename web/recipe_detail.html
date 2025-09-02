@@ -31,7 +31,11 @@
                     <h3>Ingredients</h3>
                     <div class="servings-adjuster">
                         <label for="servings-input">Servings:</label>
-                        <input type="number" id="servings-input" value="{{if .Recipe.Servings}}{{.Recipe.Servings}}{{else}}4{{end}}" min="1" data-original-servings="{{if .Recipe.Servings}}{{.Recipe.Servings}}{{else}}4{{end}}">
+                        <div class="custom-number-input">
+                            <button type="button" class="quantity-btn quantity-down" aria-label="Decrease servings">-</button>
+                            <input type="number" id="servings-input" value="{{if .Recipe.Servings}}{{.Recipe.Servings}}{{else}}4{{end}}" min="1" data-original-servings="{{if .Recipe.Servings}}{{.Recipe.Servings}}{{else}}4{{end}}">
+                            <button type="button" class="quantity-btn quantity-up" aria-label="Increase servings">+</button>
+                        </div>
                     </div>
                 </div>
                 <ul class="ingredient-list">
@@ -103,6 +107,24 @@
             if (servingsInput) {
                 servingsInput.addEventListener('change', scaleIngredients);
                 servingsInput.addEventListener('keyup', scaleIngredients);
+
+                // Add event listeners for the new +/- buttons
+                const servingsContainer = servingsInput.closest('.custom-number-input');
+                if (servingsContainer) {
+                    servingsContainer.addEventListener('click', (e) => {
+                        if (e.target.matches('.quantity-btn')) {
+                            let value = parseInt(servingsInput.value, 10) || 1;
+                            if (e.target.classList.contains('quantity-up')) {
+                                value++;
+                            } else if (e.target.classList.contains('quantity-down') && value > 1) {
+                                value--;
+                            }
+                            servingsInput.value = value;
+                            // Manually trigger the change event to run scaleIngredients
+                            servingsInput.dispatchEvent(new Event('change'));
+                        }
+                    });
+                }
             }
 
             function parseAmount(amountStr) {
@@ -126,17 +148,33 @@
 
             function formatAmount(num) {
                 if (num === 0) return "0";
+
                 const whole = Math.floor(num);
                 const frac = num - whole;
-                let fracStr = '';
+
+                if (frac < 0.01) { // If fraction is negligible, just return the whole number
+                    return String(whole);
+                }
 
                 // Common fractions with a tolerance
-                if (frac > 0.2 && frac < 0.3) fracStr = ' 1/4';
-                else if (frac > 0.3 && frac < 0.4) fracStr = ' 1/3';
-                else if (frac > 0.45 && frac < 0.55) fracStr = ' 1/2';
-                else if (frac > 0.6 && frac < 0.7) fracStr = ' 2/3';
-                else if (frac > 0.7 && frac < 0.8) fracStr = ' 3/4';
-                else if (frac > 0) fracStr = ' ' + frac.toFixed(2).replace(/^0\./, '.');
+                const fractions = {
+                    '1/8': 0.125, '1/4': 0.25, '1/3': 0.333, '3/8': 0.375,
+                    '1/2': 0.5, '5/8': 0.625, '2/3': 0.666, '3/4': 0.75, '7/8': 0.875
+                };
+                const tolerance = 0.02;
+                let fracStr = '';
+
+                for (const [key, value] of Object.entries(fractions)) {
+                    if (Math.abs(frac - value) < tolerance) {
+                        fracStr = ` ${key}`;
+                        break;
+                    }
+                }
+
+                // If no common fraction was found, format as a clean decimal.
+                if (fracStr === '' && frac > 0) {
+                    fracStr = ' ' + parseFloat(frac.toFixed(2));
+                }
 
                 let result = '';
                 if (whole > 0) result += whole;
